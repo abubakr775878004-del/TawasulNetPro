@@ -1,0 +1,8 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SPA Redirect Rule — Netlify / Bonto.dev / Vercel (Netlify-compatible hosts)
+#
+# Every URL (including deep links like /packages, /loans, etc.) is served
+# by index.html so React Router can handle client-side navigation.
+# Without this rule, refreshing any sub-path returns a raw 404.
+# ─────────────────────────────────────────────────────────────────────────────
+/*    /index.html    200

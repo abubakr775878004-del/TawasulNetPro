@@ -1,0 +1,278 @@
+import { useState, useCallback } from 'react';
+import { Plus, Package, Trash2, Edit3, X, Check } from 'lucide-react';
+import { getPackages, createPackage, deletePackage, savePackages, getLoans } from '@/lib/storage';
+import { PACKAGE_COLORS } from '@/constants';
+import { formatCurrency, PACKAGE_COLOR_MAP } from '@/lib/utils';
+import { toast } from 'sonner';
+import type { Package as PackageType } from '@/types';
+
+interface PackagesPageProps {
+  user: { role: string };
+}
+
+// ── Reseller read-only view ──────────────────────────────────────────────────
+const ResellerPackagesView = () => {
+  const packages = getPackages();
+  const loans = getLoans();
+  return (
+    <div className="space-y-6" dir="rtl">
+      <div>
+        <h1 className="text-2xl font-bold text-white">الباقات المتاحة</h1>
+        <p className="text-gray-500 text-sm mt-0.5">عرض جميع الباقات وأسعارها وعدد البطاقات المتوفرة</p>
+      </div>
+      {packages.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {packages.map((pkg) => {
+            const available = loans.filter((l) => l.packageId === pkg.id && l.status === 'available').length;
+            const colors = PACKAGE_COLOR_MAP[pkg.color || 'sky'];
+            return (
+              <div key={pkg.id} className={`card-bg rounded-xl p-5 border ${colors.border} hover:border-opacity-60 transition-all`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-4 ${colors.bg} border ${colors.border}`}>
+                  <Package size={18} className={colors.text} />
+                </div>
+                <h3 className="text-white font-bold text-lg">{pkg.name}</h3>
+                {pkg.description && <p className="text-gray-500 text-sm mt-0.5">{pkg.description}</p>}
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border/50">
+                  <div>
+                    <p className="text-gray-500 text-xs">السعر</p>
+                    <p className={`font-bold text-lg ${colors.text}`}>{pkg.value} ريال</p>
+                  </div>
+                  <div className="text-left">
+                    <p className="text-gray-500 text-xs">متوفر</p>
+                    <p className={`font-bold text-2xl ${available > 0 ? 'text-green-400' : 'text-red-400'}`}>{available}</p>
+                  </div>
+                </div>
+                {available === 0 && (
+                  <div className="mt-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-center">
+                    <span className="text-red-400 text-xs font-medium">نفد المخزون</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="card-bg rounded-xl py-20 text-center">
+          <Package size={48} className="mx-auto mb-4 text-gray-700" />
+          <p className="text-white font-medium">لا توجد باقات بعد</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const PackagesPage = ({ user }: PackagesPageProps) => {
+  const isManager = user.role === 'admin';
+
+  // Resellers see read-only availability view
+  if (!isManager) return <ResellerPackagesView />;
+
+  const [packages, setPackages] = useState<PackageType[]>(() => getPackages());
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const [form, setForm] = useState({
+    name: '',
+    value: '',
+    description: '',
+    color: 'sky',
+  });
+
+  const refresh = () => setPackages(getPackages());
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.value) { toast.error('يرجى تعبئة الاسم والقيمة'); return; }
+    const value = Number(form.value);
+    if (isNaN(value) || value <= 0) { toast.error('يرجى إدخال قيمة صحيحة'); return; }
+
+    if (editId) {
+      savePackages(getPackages().map((p) => p.id === editId ? { ...p, name: form.name, value, description: form.description, color: form.color } : p));
+      toast.success('تم تحديث الباقة');
+      setEditId(null);
+    } else {
+      createPackage({ name: form.name, value, description: form.description, color: form.color });
+      toast.success('تم إنشاء الباقة بنجاح');
+    }
+
+    setForm({ name: '', value: '', description: '', color: 'sky' });
+    setShowForm(false);
+    refresh();
+  };
+
+  const handleEdit = (pkg: PackageType) => {
+    setForm({ name: pkg.name, value: String(pkg.value), description: pkg.description || '', color: pkg.color || 'sky' });
+    setEditId(pkg.id);
+    setShowForm(true);
+  };
+
+  const handleDelete = (id: string) => {
+    const loans = getLoans();
+    const pkgLoans = loans.filter((l) => l.packageId === id);
+    if (pkgLoans.length > 0) {
+      toast.error(`لا يمكن حذف الباقة — تحتوي على ${pkgLoans.length} قرض. احذف القروض أولاً.`);
+      return;
+    }
+    deletePackage(id);
+    toast.success('تم حذف الباقة');
+    setDeleteConfirm(null);
+    refresh();
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setEditId(null);
+    setForm({ name: '', value: '', description: '', color: 'sky' });
+  };
+
+  return (
+    <div className="space-y-6" dir="rtl">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">باقات القروض</h1>
+          <p className="text-gray-500 text-sm mt-0.5">إنشاء وإدارة باقات القروض المختلفة</p>
+        </div>
+        <button onClick={() => { if (!isManager) { toast.error('إضافة الباقات متاحة للمدير فقط'); return; } cancelForm(); setShowForm(true); }} className={`btn-primary flex items-center gap-2 ${!isManager ? 'opacity-60 cursor-not-allowed' : ''}`}>
+          <Plus size={16} />
+          باقة جديدة
+        </button>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className="card-bg rounded-2xl p-6 border border-sky-500/20 animate-fade-in">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-white font-bold">{editId ? 'تعديل الباقة' : 'إضافة باقة جديدة'}</h2>
+            <button onClick={cancelForm} className="text-gray-500 hover:text-white">
+              <X size={18} />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-gray-400 text-sm mb-1.5">اسم الباقة *</label>
+              <input
+                value={form.name}
+                onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="مثال: باقة 500"
+                className="input-field"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-400 text-sm mb-1.5">القيمة (ريال) *</label>
+              <input
+                type="number"
+                value={form.value}
+                onChange={(e) => setForm((p) => ({ ...p, value: e.target.value }))}
+                placeholder="مثال: 500"
+                className="input-field"
+                min="1"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-gray-400 text-sm mb-1.5">وصف الباقة (اختياري)</label>
+              <input
+                value={form.description}
+                onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                placeholder="وصف مختصر للباقة"
+                className="input-field"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-gray-400 text-sm mb-2">اللون</label>
+              <div className="flex gap-3 flex-wrap">
+                {PACKAGE_COLORS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setForm((p) => ({ ...p, color: c.value }))}
+                    className={`px-3 py-1.5 rounded-lg text-xs border transition-all ${PACKAGE_COLOR_MAP[c.value]?.bg} ${PACKAGE_COLOR_MAP[c.value]?.text} ${
+                      form.color === c.value ? `border-2 ${PACKAGE_COLOR_MAP[c.value]?.border} scale-105` : 'border-transparent'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="md:col-span-2 flex gap-3 justify-end">
+              <button type="button" onClick={cancelForm} className="px-4 py-2 rounded-lg border border-border text-gray-400 hover:text-white hover:bg-white/5 text-sm transition-all">
+                إلغاء
+              </button>
+              <button type="submit" className="btn-primary flex items-center gap-2">
+                <Check size={16} />
+                {editId ? 'حفظ التعديلات' : 'إنشاء الباقة'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Packages grid */}
+      {packages.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {packages.map((pkg) => {
+            const colors = PACKAGE_COLOR_MAP[pkg.color || 'sky'];
+            return (
+              <div key={pkg.id} className={`card-bg rounded-xl p-5 border hover:border-opacity-50 transition-all group ${colors.border}`}>
+                <div className="flex items-start justify-between mb-4">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colors.bg} border ${colors.border}`}>
+                    <Package size={18} className={colors.text} />
+                  </div>
+                  <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => { if (!isManager) { toast.error('التعديل متاح للمدير فقط'); return; } handleEdit(pkg); }}
+                      className="p-1.5 rounded-lg hover:bg-sky-500/10 text-gray-400 hover:text-sky-400 transition-colors"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                    {deleteConfirm === pkg.id ? (
+                      <div className="flex gap-1">
+                        <button onClick={() => handleDelete(pkg.id)} className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">
+                          <Check size={14} />
+                        </button>
+                        <button onClick={() => setDeleteConfirm(null)} className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 transition-colors">
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { if (!isManager) { toast.error('الحذف متاح للمدير فقط'); return; } setDeleteConfirm(pkg.id); }}
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-400 transition-colors"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <h3 className="text-white font-bold text-lg">{pkg.name}</h3>
+                {pkg.description && <p className="text-gray-500 text-sm mt-0.5">{pkg.description}</p>}
+
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border/50">
+                  <div>
+                    <p className="text-gray-500 text-xs">القيمة</p>
+                    <p className={`font-bold text-lg ${colors.text}`}>{formatCurrency(pkg.value)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-gray-500 text-xs">القروض</p>
+                    <p className="text-neon-green font-bold text-lg">{pkg.loanCount}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="card-bg rounded-xl py-20 text-center">
+          <Package size={48} className="mx-auto mb-4 text-gray-700" />
+          <p className="text-white font-medium mb-1">لا توجد باقات بعد</p>
+          <p className="text-gray-500 text-sm">أنشئ باقتك الأولى بالضغط على "باقة جديدة"</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PackagesPage;

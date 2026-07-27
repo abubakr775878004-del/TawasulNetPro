@@ -1,0 +1,172 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 95%;
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 10%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 45% 15%;
+    --secondary-foreground: 0 0% 90%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 199 89% 48%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 18%;
+    --input: 0 0% 15%;
+    --ring: 199 89% 48%;
+    --radius: 0.5rem;
+    --sidebar: 217 45% 11%;
+    --success: 142 71% 45%;
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: 'Cairo', 'Inter', sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Cairo', 'Inter', sans-serif;
+    overflow-x: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(0 0% 10%);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(0 0% 25%);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(199 89% 48% / 0.6);
+  }
+}
+
+@layer components {
+  .sidebar-bg {
+    background: hsl(var(--sidebar));
+  }
+
+  .card-bg {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .glow-blue {
+    box-shadow: 0 0 20px hsl(199 89% 48% / 0.15);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px hsl(142 71% 45% / 0.15);
+  }
+
+  .btn-primary {
+    @apply bg-sky-500 hover:bg-sky-400 text-white font-semibold px-4 py-2 rounded-lg transition-all duration-200;
+    box-shadow: 0 0 12px hsl(199 89% 48% / 0.3);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px hsl(199 89% 48% / 0.5);
+  }
+
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white font-semibold px-4 py-2 rounded-lg transition-all duration-200;
+    box-shadow: 0 0 12px hsl(0 72% 51% / 0.2);
+  }
+
+  .btn-danger:hover {
+    box-shadow: 0 0 20px hsl(0 72% 51% / 0.4);
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all duration-200 cursor-pointer;
+  }
+
+  .nav-link.active {
+    @apply text-sky-400 bg-sky-500/10;
+    border-right: 3px solid hsl(199 89% 48%);
+  }
+
+  .metric-card {
+    @apply card-bg rounded-xl p-5 transition-all duration-200 hover:border-sky-500/30;
+  }
+
+  .data-table {
+    @apply w-full text-sm;
+  }
+
+  .data-table th {
+    @apply text-gray-400 font-medium py-3 px-4 text-right border-b border-border;
+  }
+
+  .data-table td {
+    @apply text-gray-200 py-3 px-4 border-b border-border/50;
+  }
+
+  .data-table tr:hover td {
+    @apply bg-white/2;
+  }
+
+  .input-field {
+    @apply w-full bg-muted border border-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 transition-all;
+  }
+
+  .badge-success {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/15 text-green-400;
+  }
+
+  .badge-warning {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400;
+  }
+
+  .badge-danger {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/15 text-red-400;
+  }
+
+  .badge-blue {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-500/15 text-sky-400;
+  }
+
+  .section-title {
+    @apply text-white font-bold text-lg mb-1;
+  }
+
+  .section-subtitle {
+    @apply text-gray-500 text-sm mb-6;
+  }
+}
+
+@layer utilities {
+  .bg-white\/2 {
+    background-color: rgba(255, 255, 255, 0.02);
+  }
+
+  .text-neon-green {
+    color: hsl(142 71% 45%);
+  }
+
+  .border-sky-glow {
+    border-color: hsl(199 89% 48% / 0.4);
+    box-shadow: 0 0 10px hsl(199 89% 48% / 0.1);
+  }
+}
