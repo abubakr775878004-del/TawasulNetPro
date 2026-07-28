@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Toaster } from 'sonner';
-import { initStorage } from '@/lib/storage';
+import { initStorage, purgeSoldCardsOlderThan24h } from '@/lib/storage';
 import { getAuth } from '@/lib/auth';
 import LoginPage from '@/pages/LoginPage';
 import DashboardPage from '@/pages/DashboardPage';
@@ -14,9 +14,10 @@ import MainLayout from '@/components/layout/MainLayout';
 import type { User } from '@/types';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bootstrap: seed localStorage with default packages / users / settings
+// Bootstrap: seed localStorage and clean up sold cards older than 24h
 // ─────────────────────────────────────────────────────────────────────────────
 initStorage();
+purgeSoldCardsOlderThan24h();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route map
