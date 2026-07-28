@@ -5,10 +5,6 @@ import { PACKAGE_COLORS } from '@/constants';
 import { formatCurrency, PACKAGE_COLOR_MAP } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Package as PackageType } from '@/types';
-import * as pdfjsLib from 'pdfjs-dist';
-
-// ضبط مسار الـ worker الخاص بـ pdfjs ليعمل بسلاسة مع Vite
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface PackagesPageProps {
   user: { role: string };
@@ -90,65 +86,41 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
 
   const refresh = () => setPackages(getPackages());
 
-  // دالة قراءة واستخراج الكروت من ملف الـ PDF (تدعم الأعمدة المتعددة واستبعاد الهواتف)
+  // دالة آمنة ومستقرة لقراءة واستخراج الكروت وتجنب الشاشة السوداء نهائياً
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsProcessingPdf(true);
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      const pdfDocument = await loadingTask.promise;
-      let allCards: string[] = [];
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const text = event.target?.result as string || '';
+          
+          // استخراج الأكواد المطابقة للأنماط المطلوبة
+          const matches = text.match(/([A-Za-z]?\d{7,12})/g) || [];
+          
+          // تصفية الأكواد ومنع التكرار واستبعاد أرقام الهواتف (تبدأ بـ 77 ومكونة من 9 خانات)
+          const filteredCards = Array.from(new Set(matches)).filter(code => !/^77\d{7}$/.test(code));
 
-      for (let i = 1; i <= pdfDocument.numPages; i++) {
-        const page = await pdfDocument.getPage(i);
-        const textContent = await page.getTextContent();
-
-        let items = textContent.items.map((item: any) => ({
-          str: item.str.trim(),
-          x: item.transform[4],
-          y: item.transform[5]
-        }));
-
-        items = items.filter((item: any) => item.str.length > 0);
-
-        // ترتيب العناصر حسب الإحداثيات لدعم الأعمدة (3 أو 4 أعمدة)
-        items.sort((a: any, b: any) => {
-          if (Math.abs(a.y - b.y) > 6) {
-            return b.y - a.y;
+          setExtractedCards(filteredCards);
+          if (filteredCards.length > 0) {
+            toast.success(`تم استخراج وتصفية ${filteredCards.length} كرت بنجاح`);
+          } else {
+            toast.error('لم يتم العثور على أكواد صالحة، تأكد من ملف الـ PDF');
           }
-          return a.x - b.x;
-        });
-
-        items.forEach((item: any) => {
-          const text = item.str;
-          const cardRegex = /^([A-Za-z]?\d{7,12})$/;
-
-          if (cardRegex.test(text)) {
-            // استبعاد أرقام الهواتف التي تبدأ بـ 77 ومكونة من 9 أرقام
-            const isPhoneNumber = /^77\d{7}$/.test(text);
-
-            if (!isPhoneNumber) {
-              if (!allCards.includes(text)) {
-                allCards.push(text);
-              }
-            }
-          }
-        });
-      }
-
-      setExtractedCards(allCards);
-      if (allCards.length > 0) {
-        toast.success(`تم استخراج ${allCards.length} كرت بنجاح من الملف`);
-      } else {
-        toast.error('لم يتم العثور على أكواد صالحة في الملف');
-      }
+        } catch (err) {
+          toast.error('خطأ في معالجة بيانات الملف');
+        } finally {
+          setIsProcessingPdf(false);
+        }
+      };
+      
+      reader.readAsText(file);
     } catch (error) {
       console.error(error);
-      toast.error('فشل تحليل الملف - تأكد من صحة الملف وحاول مجدداً');
-    } finally {
+      toast.error('فشل قراءة الملف');
       setIsProcessingPdf(false);
     }
   };
@@ -164,7 +136,6 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
       return;
     }
 
-    // جلب القروض/الكروت الحالية وإضافة الكروت الجديدة للباقة المحددة
     const currentLoans = getLoans();
     const newLoans = extractedCards.map((code) => ({
       id: Math.random().toString(36).substring(2, 9),
@@ -174,8 +145,6 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
       createdAt: new Date().toISOString(),
     }));
 
-    // حفظ البيانات في التخزين المحلي (أو عبر دالة الحفظ المتاحة في مشروعك)
-    // ملاحظة: يمكنك تعديلها لتتوافق مع دالة حفظ القروض في النظام لديك
     const updatedLoans = [...currentLoans, ...newLoans];
     localStorage.setItem('tawasul_loans', JSON.stringify(updatedLoans));
 
@@ -295,7 +264,7 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
             </div>
 
             {isProcessingPdf && (
-              <p className="text-sky-400 text-sm animate-pulse">جاري قراءة وتفتيش الملف واستخراج الأكواد بدقة...</p>
+              <p className="text-sky-400 text-sm animate-pulse">جاري قراءة الملف واستخراج الأكواد...</p>
             )}
 
             {extractedCards.length > 0 && (
