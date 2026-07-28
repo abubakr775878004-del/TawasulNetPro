@@ -9,7 +9,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
-    "start": "vite preview --host 0.0.0.0 --port ${PORT:-3000}"
+    "start": "vite build && vite preview --host 0.0.0.0 --port ${PORT:-3000}"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
