@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "build:dev": "vite build --mode development",
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "build:dev": "npx vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
-    "start": "vite build && vite preview --host 0.0.0.0 --port ${PORT:-3000}"
+    "preview": "npx vite preview --host 0.0.0.0 --port ${PORT:-3000}",
+    "start": "npx vite build && npx vite preview --host 0.0.0.0 --port ${PORT:-3000}"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
