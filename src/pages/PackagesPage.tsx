@@ -1,10 +1,14 @@
-import { useState, useCallback } from 'react';
-import { Plus, Package, Trash2, Edit3, X, Check } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, Package, Trash2, Edit3, X, Check, FileText } from 'lucide-react';
 import { getPackages, createPackage, deletePackage, savePackages, getLoans } from '@/lib/storage';
 import { PACKAGE_COLORS } from '@/constants';
 import { formatCurrency, PACKAGE_COLOR_MAP } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Package as PackageType } from '@/types';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// ضبط مسار الـ worker الخاص بـ pdfjs ليعمل بسلاسة مع Vite
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface PackagesPageProps {
   user: { role: string };
@@ -64,13 +68,18 @@ const ResellerPackagesView = () => {
 const PackagesPage = ({ user }: PackagesPageProps) => {
   const isManager = user.role === 'admin';
 
-  // Resellers see read-only availability view
   if (!isManager) return <ResellerPackagesView />;
 
   const [packages, setPackages] = useState<PackageType[]>(() => getPackages());
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  // حالات خاصة باستيراد الـ PDF
+  const [showPdfModal, setShowPdfModal] = useState(false);
+  const [targetPackageId, setTargetPackageId] = useState('');
+  const [extractedCards, setExtractedCards] = useState<string[]>([]);
+  const [isProcessingPdf, setIsProcessingPdf] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
@@ -80,6 +89,102 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
   });
 
   const refresh = () => setPackages(getPackages());
+
+  // دالة قراءة واستخراج الكروت من ملف الـ PDF (تدعم الأعمدة المتعددة واستبعاد الهواتف)
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessingPdf(true);
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdfDocument = await loadingTask.promise;
+      let allCards: string[] = [];
+
+      for (let i = 1; i <= pdfDocument.numPages; i++) {
+        const page = await pdfDocument.getPage(i);
+        const textContent = await page.getTextContent();
+
+        let items = textContent.items.map((item: any) => ({
+          str: item.str.trim(),
+          x: item.transform[4],
+          y: item.transform[5]
+        }));
+
+        items = items.filter((item: any) => item.str.length > 0);
+
+        // ترتيب العناصر حسب الإحداثيات لدعم الأعمدة (3 أو 4 أعمدة)
+        items.sort((a: any, b: any) => {
+          if (Math.abs(a.y - b.y) > 6) {
+            return b.y - a.y;
+          }
+          return a.x - b.x;
+        });
+
+        items.forEach((item: any) => {
+          const text = item.str;
+          const cardRegex = /^([A-Za-z]?\d{7,12})$/;
+
+          if (cardRegex.test(text)) {
+            // استبعاد أرقام الهواتف التي تبدأ بـ 77 ومكونة من 9 أرقام
+            const isPhoneNumber = /^77\d{7}$/.test(text);
+
+            if (!isPhoneNumber) {
+              if (!allCards.includes(text)) {
+                allCards.push(text);
+              }
+            }
+          }
+        });
+      }
+
+      setExtractedCards(allCards);
+      if (allCards.length > 0) {
+        toast.success(`تم استخراج ${allCards.length} كرت بنجاح من الملف`);
+      } else {
+        toast.error('لم يتم العثور على أكواد صالحة في الملف');
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error('فشل تحليل الملف - تأكد من صحة الملف وحاول مجدداً');
+    } finally {
+      setIsProcessingPdf(false);
+    }
+  };
+
+  // حفظ الكروت المستخرجة للباقة المحددة
+  const handleSaveImportedCards = () => {
+    if (!targetPackageId) {
+      toast.error('الرجاء اختيار الباقة المستهدفة أولاً');
+      return;
+    }
+    if (extractedCards.length === 0) {
+      toast.error('لا توجد كروت للاستيراد');
+      return;
+    }
+
+    // جلب القروض/الكروت الحالية وإضافة الكروت الجديدة للباقة المحددة
+    const currentLoans = getLoans();
+    const newLoans = extractedCards.map((code) => ({
+      id: Math.random().toString(36).substring(2, 9),
+      packageId: targetPackageId,
+      code: code,
+      status: 'available' as const,
+      createdAt: new Date().toISOString(),
+    }));
+
+    // حفظ البيانات في التخزين المحلي (أو عبر دالة الحفظ المتاحة في مشروعك)
+    // ملاحظة: يمكنك تعديلها لتتوافق مع دالة حفظ القروض في النظام لديك
+    const updatedLoans = [...currentLoans, ...newLoans];
+    localStorage.setItem('tawasul_loans', JSON.stringify(updatedLoans));
+
+    toast.success(`تمت إضافة ${extractedCards.length} كرت إلى الباقة بنجاح!`);
+    setShowPdfModal(false);
+    setExtractedCards([]);
+    setTargetPackageId('');
+    refresh();
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,18 +234,99 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
   return (
     <div className="space-y-6" dir="rtl">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">باقات القروض</h1>
-          <p className="text-gray-500 text-sm mt-0.5">إنشاء وإدارة باقات القروض المختلفة</p>
+          <h1 className="text-2xl font-bold text-white">باقات القروض والبطاقات</h1>
+          <p className="text-gray-500 text-sm mt-0.5">إنشاء وإدارة الباقات واستيراد الكروت عبر PDF</p>
         </div>
-        <button onClick={() => { if (!isManager) { toast.error('إضافة الباقات متاحة للمدير فقط'); return; } cancelForm(); setShowForm(true); }} className={`btn-primary flex items-center gap-2 ${!isManager ? 'opacity-60 cursor-not-allowed' : ''}`}>
-          <Plus size={16} />
-          باقة جديدة
-        </button>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setShowPdfModal(true)} 
+            className="px-4 py-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400 hover:bg-sky-500/20 flex items-center gap-2 text-sm font-medium transition-all"
+          >
+            <FileText size={16} />
+            استيراد PDF
+          </button>
+          <button onClick={() => { cancelForm(); setShowForm(true); }} className="btn-primary flex items-center gap-2">
+            <Plus size={16} />
+            باقة جديدة
+          </button>
+        </div>
       </div>
 
-      {/* Form */}
+      {/* نافذة استيراد الـ PDF المنسدلة */}
+      {showPdfModal && (
+        <div className="card-bg rounded-2xl p-6 border border-sky-500/30 animate-fade-in bg-slate-900/90">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-white font-bold text-lg flex items-center gap-2">
+              <FileText size={18} className="text-sky-400" />
+              استيراد البطاقات من ملف PDF
+            </h2>
+            <button onClick={() => setShowPdfModal(false)} className="text-gray-500 hover:text-white">
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-400 text-sm mb-1.5">الباقة المستهدفة *</label>
+              <select
+                value={targetPackageId}
+                onChange={(e) => setTargetPackageId(e.target.value)}
+                className="input-field w-full bg-slate-800 text-white border border-border rounded-xl p-2.5"
+              >
+                <option value="">اختر الباقة لإضافة الكروت إليها...</option>
+                {packages.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.name} ({pkg.value} ريال)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-gray-400 text-sm mb-1.5">اختر ملف الـ PDF *</label>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={handlePdfUpload}
+                className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-sky-500/20 file:text-sky-400 hover:file:bg-sky-500/30 cursor-pointer"
+              />
+            </div>
+
+            {isProcessingPdf && (
+              <p className="text-sky-400 text-sm animate-pulse">جاري قراءة وتفتيش الملف واستخراج الأكواد بدقة...</p>
+            )}
+
+            {extractedCards.length > 0 && (
+              <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-xl">
+                <p className="text-green-400 text-sm font-medium">
+                  تم استخراج وتصفية <span className="font-bold">{extractedCards.length}</span> كرت بنجاح (جاهزة للإضافة).
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowPdfModal(false)}
+                className="px-4 py-2 rounded-xl border border-border text-gray-400 hover:text-white hover:bg-white/5 text-sm"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={handleSaveImportedCards}
+                disabled={extractedCards.length === 0 || !targetPackageId}
+                className="btn-primary flex items-center gap-2 disabled:opacity-50"
+              >
+                <Check size={16} />
+                تأكيد وإضافة الكروت للباقة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Form For Packages */}
       {showForm && (
         <div className="card-bg rounded-2xl p-6 border border-sky-500/20 animate-fade-in">
           <div className="flex items-center justify-between mb-5">
@@ -155,7 +341,7 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
               <input
                 value={form.name}
                 onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                placeholder="مثال: باقة 500"
+                placeholder="مثال: باقة 200"
                 className="input-field"
               />
             </div>
@@ -165,7 +351,7 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
                 type="number"
                 value={form.value}
                 onChange={(e) => setForm((p) => ({ ...p, value: e.target.value }))}
-                placeholder="مثال: 500"
+                placeholder="مثال: 200"
                 className="input-field"
                 min="1"
               />
@@ -222,7 +408,7 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
                   </div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
-                      onClick={() => { if (!isManager) { toast.error('التعديل متاح للمدير فقط'); return; } handleEdit(pkg); }}
+                      onClick={() => handleEdit(pkg)}
                       className="p-1.5 rounded-lg hover:bg-sky-500/10 text-gray-400 hover:text-sky-400 transition-colors"
                     >
                       <Edit3 size={14} />
@@ -238,7 +424,7 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
                       </div>
                     ) : (
                       <button
-                        onClick={() => { if (!isManager) { toast.error('الحذف متاح للمدير فقط'); return; } setDeleteConfirm(pkg.id); }}
+                        onClick={() => setDeleteConfirm(pkg.id)}
                         className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-400 transition-colors"
                       >
                         <Trash2 size={14} />
