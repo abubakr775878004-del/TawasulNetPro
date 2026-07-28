@@ -28,6 +28,7 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
+      external: ['pdfjs-dist'],
       output: {
         manualChunks: {
           vendor: ["react", "react-dom", "react-router-dom"],
