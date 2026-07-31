@@ -1,10 +1,26 @@
 import React, { useState } from 'react';
 import { Plus, Package, Trash2, Edit3, X, Check, FileText } from 'lucide-react';
-import { getPackages, createPackage, deletePackage, savePackages, getLoans } from '@/lib/storage';
+import { getPackages, createPackage, deletePackage, savePackages, getLoans, createLoans } from '@/lib/storage';
 import { PACKAGE_COLORS } from '@/constants';
 import { formatCurrency, PACKAGE_COLOR_MAP } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Package as PackageType } from '@/types';
+
+// ── PDF.js worker (loaded lazily from CDN, نفس المنطق المستخدم في صفحة القروض) ──
+let pdfjsLib: typeof import('pdfjs-dist') | null = null;
+const loadPdfjs = async () => {
+  if (pdfjsLib) return pdfjsLib;
+  const lib = await import('pdfjs-dist');
+  lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.js`;
+  pdfjsLib = lib;
+  return lib;
+};
+
+const PHONE_RE = /^[\d\s\+\-\(\)]{7,15}$/;
+const extractCardsFromPdfText = (text: string): string[] => {
+  const matches = text.match(/([A-Za-z]?\d{7,12})/g) || [];
+  return Array.from(new Set(matches)).filter((code) => !PHONE_RE.test(code) && !/^77\d{7}$/.test(code));
+};
 
 interface PackagesPageProps {
   user: { role: string };
@@ -86,46 +102,41 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
 
   const refresh = () => setPackages(getPackages());
 
-  // دالة آمنة ومستقرة لقراءة واستخراج الكروت وتجنب الشاشة السوداء نهائياً
+  // قراءة PDF فعلية عبر pdfjs (الطريقة القديمة كانت تقرأ ملف الـ PDF الثنائي
+  // كنص عبر readAsText، مما ينتج بيانات تالفة ولا يستخرج أي كود عملياً)
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsProcessingPdf(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        try {
-          const text = event.target?.result as string || '';
-          
-          // استخراج الأكواد المطابقة للأنماط المطلوبة
-          const matches = text.match(/([A-Za-z]?\d{7,12})/g) || [];
-          
-          // تصفية الأكواد ومنع التكرار واستبعاد أرقام الهواتف (تبدأ بـ 77 ومكونة من 9 خانات)
-          const filteredCards = Array.from(new Set(matches)).filter(code => !/^77\d{7}$/.test(code));
+      const lib = await loadPdfjs();
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await lib.getDocument({ data: arrayBuffer }).promise;
+      const pageTexts: string[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        pageTexts.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '));
+      }
+      const filteredCards = extractCardsFromPdfText(pageTexts.join(' '));
 
-          setExtractedCards(filteredCards);
-          if (filteredCards.length > 0) {
-            toast.success(`تم استخراج وتصفية ${filteredCards.length} كرت بنجاح`);
-          } else {
-            toast.error('لم يتم العثور على أكواد صالحة، تأكد من ملف الـ PDF');
-          }
-        } catch (err) {
-          toast.error('خطأ في معالجة بيانات الملف');
-        } finally {
-          setIsProcessingPdf(false);
-        }
-      };
-      
-      reader.readAsText(file);
+      setExtractedCards(filteredCards);
+      if (filteredCards.length > 0) {
+        toast.success(`تم استخراج وتصفية ${filteredCards.length} كرت بنجاح`);
+      } else {
+        toast.error('لم يتم العثور على أكواد صالحة، تأكد من ملف الـ PDF');
+      }
     } catch (error) {
       console.error(error);
-      toast.error('فشل قراءة الملف');
+      toast.error('فشل قراءة أو تحليل ملف الـ PDF');
+    } finally {
       setIsProcessingPdf(false);
     }
   };
 
-  // حفظ الكروت المستخرجة للباقة المحددة
+  // حفظ الكروت المستخرجة للباقة المحددة (يستخدم نفس طبقة التخزين الموحّدة
+  // مع فحص التكرار، بدلاً من الكتابة المباشرة على مفتاح localStorage خاطئ)
   const handleSaveImportedCards = () => {
     if (!targetPackageId) {
       toast.error('الرجاء اختيار الباقة المستهدفة أولاً');
@@ -136,19 +147,20 @@ const PackagesPage = ({ user }: PackagesPageProps) => {
       return;
     }
 
-    const currentLoans = getLoans();
-    const newLoans = extractedCards.map((code) => ({
-      id: Math.random().toString(36).substring(2, 9),
+    const pkg = packages.find((p) => p.id === targetPackageId);
+    const dataList = extractedCards.map((code) => ({
+      code,
       packageId: targetPackageId,
-      code: code,
+      packageName: pkg?.name || '',
+      addedBy: 'admin-001',
       status: 'available' as const,
-      createdAt: new Date().toISOString(),
+      source: 'pdf' as const,
     }));
 
-    const updatedLoans = [...currentLoans, ...newLoans];
-    localStorage.setItem('tawasul_loans', JSON.stringify(updatedLoans));
+    const { added, duplicates } = createLoans(dataList);
+    if (added.length > 0) toast.success(`تمت إضافة ${added.length} كرت إلى الباقة بنجاح!`);
+    if (duplicates.length > 0) toast.warning(`تم تجاهل ${duplicates.length} كود مكرر (موجود مسبقاً)`);
 
-    toast.success(`تمت إضافة ${extractedCards.length} كرت إلى الباقة بنجاح!`);
     setShowPdfModal(false);
     setExtractedCards([]);
     setTargetPackageId('');
