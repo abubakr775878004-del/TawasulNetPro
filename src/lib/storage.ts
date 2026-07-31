@@ -146,28 +146,63 @@ export const markLoanSold = (id: string, soldBy: string) => {
   ));
 };
 
+// طبّع الكود قبل المقارنة (إزالة المسافات + تجاهل حالة الأحرف) لمنع التكرار الحقيقي
+const normalizeCode = (code: string): string => code.trim().toLowerCase();
+
+export class DuplicateCodeError extends Error {
+  duplicates: string[];
+  constructor(duplicates: string[]) {
+    super(`أكواد مكررة: ${duplicates.join(', ')}`);
+    this.duplicates = duplicates;
+  }
+}
+
 export const createLoan = (data: Omit<Loan, 'id' | 'addedAt'>): Loan => {
-  const loan: Loan = { ...data, id: `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, addedAt: new Date().toISOString() };
   const loans = getLoans();
+  const existingCodes = new Set(loans.map((l) => normalizeCode(l.code)));
+  if (existingCodes.has(normalizeCode(data.code))) {
+    throw new DuplicateCodeError([data.code]);
+  }
+  const loan: Loan = { ...data, id: `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, addedAt: new Date().toISOString() };
   loans.push(loan);
   saveLoans(loans);
   updatePackageLoanCount(loan.packageId);
   return loan;
 };
 
-export const createLoans = (dataList: Omit<Loan, 'id' | 'addedAt'>[]): Loan[] => {
+// يتجاهل الأكواد المكررة (مع القروض الموجودة، ومع بعضها داخل نفس الدفعة) ويعيد
+// كلاً من القروض التي أُضيفت فعلياً وقائمة الأكواد المكررة التي تم تجاهلها.
+export const createLoans = (
+  dataList: Omit<Loan, 'id' | 'addedAt'>[]
+): { added: Loan[]; duplicates: string[] } => {
   const now = new Date().toISOString();
-  const newLoans: Loan[] = dataList.map((data, i) => ({
-    ...data,
-    id: `loan-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
-    addedAt: now,
-  }));
   const loans = getLoans();
-  loans.push(...newLoans);
-  saveLoans(loans);
-  const packageIds = [...new Set(dataList.map((d) => d.packageId))];
-  packageIds.forEach(updatePackageLoanCount);
-  return newLoans;
+  const existingCodes = new Set(loans.map((l) => normalizeCode(l.code)));
+  const seenInBatch = new Set<string>();
+  const duplicates: string[] = [];
+
+  const added: Loan[] = [];
+  dataList.forEach((data, i) => {
+    const norm = normalizeCode(data.code);
+    if (existingCodes.has(norm) || seenInBatch.has(norm)) {
+      duplicates.push(data.code);
+      return;
+    }
+    seenInBatch.add(norm);
+    added.push({
+      ...data,
+      id: `loan-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+      addedAt: now,
+    });
+  });
+
+  if (added.length > 0) {
+    loans.push(...added);
+    saveLoans(loans);
+    const packageIds = [...new Set(added.map((d) => d.packageId))];
+    packageIds.forEach(updatePackageLoanCount);
+  }
+  return { added, duplicates };
 };
 
 export const deleteLoan = (id: string) => {
