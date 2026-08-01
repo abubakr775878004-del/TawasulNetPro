@@ -5,8 +5,9 @@ export const CONTACT_PHONE = '775878004';
 export const CURRENCY = 'ريال';
 export const CURRENCY_EN = 'Riyal';
 
-export const ADMIN_EMAIL = 'admin@tawasulnet.com';
-export const ADMIN_PASSWORD = 'admin123';
+// ── بيانات المدير الجديدة ──────────────────────────────────────────
+export const ADMIN_EMAIL = 'Abubakr775878004@gmail.com';
+export const ADMIN_PASSWORD = 'abubakr350';
 
 export const STORAGE_KEYS = {
   AUTH: 'tawasulnet_auth',
