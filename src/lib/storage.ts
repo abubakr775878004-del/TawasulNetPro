@@ -1,6 +1,19 @@
 import { STORAGE_KEYS, ADMIN_EMAIL, OWNER_NAME, CONTACT_PHONE } from '@/constants';
 import type { User, Package, Loan, SystemSettings, MikroTikConfig } from '@/types';
 
+// ── Types for Card Requests ────────────────────────────────────────────────
+export interface CardRequest {
+  id: string;
+  resellerId: string;
+  resellerName: string;
+  packageId: string;
+  packageName: string;
+  quantity: number;
+  totalPrice: number;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 const read = <T>(key: string, fallback: T): T => {
   try {
@@ -113,6 +126,10 @@ export const updateUser = (id: string, data: Partial<User>) => {
   saveUsers(getUsers().map((u) => (u.id === id ? { ...u, ...data } : u)));
 };
 
+export const updateUserBalance = (userId: string, newBalance: number) => {
+  updateUser(userId, { balance: Math.max(0, newBalance) });
+};
+
 // ── Packages ───────────────────────────────────────────────────────────────
 export const getPackages = (): Package[] => read<Package[]>(STORAGE_KEYS.PACKAGES, []);
 export const savePackages = (packages: Package[]) => write(STORAGE_KEYS.PACKAGES, packages);
@@ -131,22 +148,64 @@ export const deletePackage = (id: string) => {
 
 export const updatePackageLoanCount = (packageId: string) => {
   const loans = getLoans();
-  const count = loans.filter((l) => l.packageId === packageId).length;
+  const count = loans.filter((l) => l.packageId === packageId && l.status !== 'sold' && !l.assignedTo).length;
   savePackages(getPackages().map((p) => (p.id === packageId ? { ...p, loanCount: count } : p)));
 };
 
-// ── Loans ──────────────────────────────────────────────────────────────────
+// ── Loans (الكروت وحمايتها) ─────────────────────────────────────────────────
 export const getLoans = (): Loan[] => read<Loan[]>(STORAGE_KEYS.LOANS, []);
 export const saveLoans = (loans: Loan[]) => write(STORAGE_KEYS.LOANS, loans);
 
-// Mark a card as sold by a reseller (triggers 24h countdown)
-export const markLoanSold = (id: string, soldBy: string) => {
-  saveLoans(getLoans().map((l) =>
-    l.id === id ? { ...l, status: 'sold', soldAt: new Date().toISOString(), soldBy } : l
-  ));
+// جلب الكروت الخاصة بالموزع فقط مع حجب واستبدال أرقام الكروت تماماً بـ ********
+export const getLoansForReseller = (resellerId: string): Loan[] => {
+  purgeSoldCardsOlderThan24h();
+  const loans = getLoans();
+  return loans
+    .filter((l) => l.assignedTo === resellerId || l.soldBy === resellerId)
+    .map((l) => ({
+      ...l,
+      // كشف الرقم فقط إذا تم البيع بالفعل، وإلا يظل محجوباً تماماً
+      code: l.status === 'sold' ? l.code : '********',
+    }));
 };
 
-// طبّع الكود قبل المقارنة (إزالة المسافات + تجاهل حالة الأحرف) لمنع التكرار الحقيقي
+// بيع الكرت للزبون: يكشف الكود، يخصم الرصيد، ويبدأ عداد الـ 24 ساعة
+export const sellLoanToCustomer = (loanId: string, resellerId: string): { success: boolean; message: string; loan?: Loan } => {
+  const loans = getLoans();
+  const loanIndex = loans.findIndex((l) => l.id === loanId && (l.assignedTo === resellerId || l.soldBy === resellerId));
+
+  if (loanIndex === -1) return { success: false, message: 'الكارت غير متاح في حسابك!' };
+  if (loans[loanIndex].status === 'sold') return { success: false, message: 'تم بيع هذا الكارت مسبقاً!' };
+
+  const users = getUsers();
+  const resellerIndex = users.findIndex((u) => u.id === resellerId);
+  if (resellerIndex === -1) return { success: false, message: 'حساب الموزع غير موجود!' };
+
+  const reseller = users[resellerIndex];
+  const pkg = getPackages().find((p) => p.id === loans[loanIndex].packageId);
+  const cardPrice = pkg ? pkg.value : 0;
+
+  if (reseller.role === 'reseller' && reseller.balance < cardPrice) {
+    return { success: false, message: `رصيدك غير كافٍ! سعر الكارت: ${cardPrice} - رصيدك الحالي: ${reseller.balance}` };
+  }
+
+  // خصم الرصيد من الموزع
+  if (reseller.role === 'reseller') {
+    users[resellerIndex].balance -= cardPrice;
+    saveUsers(users);
+  }
+
+  // تحديث حالة الكرت وتغيير تاريخ البيع
+  loans[loanIndex].status = 'sold';
+  loans[loanIndex].soldAt = new Date().toISOString();
+  loans[loanIndex].soldBy = resellerId;
+
+  saveLoans(loans);
+  updatePackageLoanCount(loans[loanIndex].packageId);
+
+  return { success: true, message: 'تم بيع الكارت وخصم الرصيد بنجاح!', loan: loans[loanIndex] };
+};
+
 const normalizeCode = (code: string): string => code.trim().toLowerCase();
 
 export class DuplicateCodeError extends Error {
@@ -170,8 +229,6 @@ export const createLoan = (data: Omit<Loan, 'id' | 'addedAt'>): Loan => {
   return loan;
 };
 
-// يتجاهل الأكواد المكررة (مع القروض الموجودة، ومع بعضها داخل نفس الدفعة) ويعيد
-// كلاً من القروض التي أُضيفت فعلياً وقائمة الأكواد المكررة التي تم تجاهلها.
 export const createLoans = (
   dataList: Omit<Loan, 'id' | 'addedAt'>[]
 ): { added: Loan[]; duplicates: string[] } => {
@@ -213,22 +270,18 @@ export const deleteLoan = (id: string) => {
 };
 
 // ── 24-hour sold-card auto-purge ──────────────────────────────────────────
-// Call this on app boot / page load to remove sold cards that are >24 h old.
 export const purgeSoldCardsOlderThan24h = (): number => {
   const loans = getLoans();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const toKeep = loans.filter((l) => {
-    if (l.status !== 'sold') return true;          // keep all non-sold
-    if (!l.soldAt) return false;                   // sold but no timestamp → purge
-    return new Date(l.soldAt).getTime() > cutoff;  // within 24 h → keep
+    if (l.status !== 'sold') return true;
+    if (!l.soldAt) return false;
+    return new Date(l.soldAt).getTime() > cutoff;
   });
   const purgedCount = loans.length - toKeep.length;
   if (purgedCount > 0) {
     saveLoans(toKeep);
-    // Recalculate counts for affected packages
-    const affectedPkgIds = [...new Set(
-      loans.filter((l) => !toKeep.find((k) => k.id === l.id)).map((l) => l.packageId)
-    )];
+    const affectedPkgIds = [...new Set(loans.filter((l) => !toKeep.find((k) => k.id === l.id)).map((l) => l.packageId))];
     affectedPkgIds.forEach(updatePackageLoanCount);
   }
   return purgedCount;
@@ -249,10 +302,78 @@ export const deleteLoansByDate = (date: string, packageId?: string) => {
   return toDelete.length;
 };
 
-// ── Settings ───────────────────────────────────────────────────────────────
+// ── Card Requests (نظام طلب الكروت بدون رؤيتها) ────────────────────────────────
+const REQUESTS_KEY = 'tawasulnet_requests';
+
+export const getCardRequests = (): CardRequest[] => read<CardRequest[]>(REQUESTS_KEY, []);
+export const saveCardRequests = (requests: CardRequest[]) => write(REQUESTS_KEY, requests);
+
+// إنشاء طلب كروت من قبل الموزع
+export const createCardRequest = (
+  resellerId: string,
+  resellerName: string,
+  packageId: string,
+  packageName: string,
+  quantity: number,
+  unitPrice: number
+): CardRequest => {
+  const req: CardRequest = {
+    id: `req-${Date.now()}`,
+    resellerId,
+    resellerName,
+    packageId,
+    packageName,
+    quantity,
+    totalPrice: quantity * unitPrice,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  const requests = getCardRequests();
+  requests.push(req);
+  saveCardRequests(requests);
+  return req;
+};
+
+// موافقة المدير وتخصيص الكروت للموزع مع بقائها مجهولة وأرقامها محجوبة
+export const approveCardRequest = (requestId: string): { success: boolean; message: string } => {
+  const requests = getCardRequests();
+  const reqIndex = requests.findIndex((r) => r.id === requestId);
+  if (reqIndex === -1) return { success: false, message: 'الطلب غير موجود!' };
+
+  const req = requests[reqIndex];
+  if (req.status !== 'pending') return { success: false, message: 'تم التعامل مع هذا الطلب مسبقاً!' };
+
+  const loans = getLoans();
+  const availableLoans = loans.filter((l) => l.packageId === req.packageId && l.status !== 'sold' && !l.assignedTo);
+
+  if (availableLoans.length < req.quantity) {
+    return { success: false, message: `المخزون غير كافٍ! المتاح فقط: ${availableLoans.length} كارت.` };
+  }
+
+  let count = 0;
+  for (let i = 0; i < loans.length && count < req.quantity; i++) {
+    if (loans[i].packageId === req.packageId && loans[i].status !== 'sold' && !loans[i].assignedTo) {
+      loans[i].assignedTo = req.resellerId;
+      count++;
+    }
+  }
+
+  requests[reqIndex].status = 'approved';
+  saveLoans(loans);
+  saveCardRequests(requests);
+  updatePackageLoanCount(req.packageId);
+
+  return { success: true, message: 'تمت الموافقة وتخصيص الكروت للموزع بنجاح!' };
+};
+
+export const rejectCardRequest = (requestId: string) => {
+  const requests = getCardRequests();
+  saveCardRequests(requests.map((r) => (r.id === requestId ? { ...r, status: 'rejected' } : r)));
+};
+
+// ── Settings & MikroTik ────────────────────────────────────────────────────
 export const getSettings = (): SystemSettings => read<SystemSettings>(STORAGE_KEYS.SETTINGS, seedDefaultSettings());
 export const saveSettings = (s: SystemSettings) => write(STORAGE_KEYS.SETTINGS, s);
 
-// ── MikroTik ───────────────────────────────────────────────────────────────
 export const getMikrotik = (): MikroTikConfig => read<MikroTikConfig>(STORAGE_KEYS.MIKROTIK, seedDefaultMikrotik());
 export const saveMikrotik = (m: MikroTikConfig) => write(STORAGE_KEYS.MIKROTIK, m);
