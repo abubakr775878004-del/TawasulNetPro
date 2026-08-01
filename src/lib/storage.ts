@@ -213,19 +213,6 @@ export const sellLoanToCustomer = (loanId: string, resellerId: string): { succes
   const resellerIndex = users.findIndex((u) => u.id === resellerId);
   if (resellerIndex === -1) return { success: false, message: 'حساب الموزع غير موجود!' };
 
-  const reseller = users[resellerIndex];
-  const pkg = getPackages().find((p) => p.id === loans[loanIndex].packageId);
-  const cardPrice = pkg ? pkg.value : 0;
-
-  if (reseller.role === 'reseller' && reseller.balance < cardPrice) {
-    return { success: false, message: `رصيدك غير كافٍ! سعر الكارت: ${cardPrice} - رصيدك الحالي: ${reseller.balance}` };
-  }
-
-  if (reseller.role === 'reseller') {
-    users[resellerIndex].balance -= cardPrice;
-    saveUsers(users);
-  }
-
   loans[loanIndex].status = 'sold';
   loans[loanIndex].soldAt = new Date().toISOString();
   loans[loanIndex].soldBy = resellerId;
@@ -233,7 +220,7 @@ export const sellLoanToCustomer = (loanId: string, resellerId: string): { succes
   saveLoans(loans);
   updatePackageLoanCount(loans[loanIndex].packageId);
 
-  return { success: true, message: 'تم بيع الكارت وخصم الرصيد بنجاح!', loan: loans[loanIndex] };
+  return { success: true, message: 'تم بيع الكارت بنجاح!', loan: loans[loanIndex] };
 };
 
 export const markLoanSold = (id: string, soldBy: string) => {
@@ -342,6 +329,7 @@ const REQUESTS_KEY = 'tawasulnet_requests';
 export const getCardRequests = (): CardRequest[] => read<CardRequest[]>(REQUESTS_KEY, []);
 export const saveCardRequests = (requests: CardRequest[]) => write(REQUESTS_KEY, requests);
 
+// إنشاء طلب كروت جديد (مع فحص الرصيد أولاً)
 export const createCardRequest = (
   resellerId: string,
   resellerName: string,
@@ -349,7 +337,24 @@ export const createCardRequest = (
   packageName: string,
   quantity: number,
   unitPrice: number
-): CardRequest => {
+): { success: boolean; message: string; req?: CardRequest } => {
+  const users = getUsers();
+  const reseller = users.find((u) => u.id === resellerId);
+
+  if (!reseller) {
+    return { success: false, message: 'الموزع غير موجود!' };
+  }
+
+  const totalPrice = quantity * unitPrice;
+
+  // فحص الرصيد: يمنع تقديم الطلب إن لم يكن الرصيد كافياً
+  if (reseller.balance < totalPrice) {
+    return {
+      success: false,
+      message: `رصيدك الحالي (${reseller.balance} ريال) لا يكفي لطلب ${quantity} كروت بقيمة إجمالية (${totalPrice} ريال). يرجى شحن رصيدك أولاً!`,
+    };
+  }
+
   const req: CardRequest = {
     id: `req-${Date.now()}`,
     resellerId,
@@ -357,16 +362,19 @@ export const createCardRequest = (
     packageId,
     packageName,
     quantity,
-    totalPrice: quantity * unitPrice,
+    totalPrice,
     status: 'pending',
     createdAt: new Date().toISOString(),
   };
+
   const requests = getCardRequests();
   requests.push(req);
   saveCardRequests(requests);
-  return req;
+
+  return { success: true, message: 'تم إرسال الطلب للمدير بنجاح وفي انتظار الموافقة.', req };
 };
 
+// موافقة المدير على الطلب (تخصيص الكروت + خصم الرصيد)
 export const approveCardRequest = (requestId: string): { success: boolean; message: string } => {
   const requests = getCardRequests();
   const reqIndex = requests.findIndex((r) => r.id === requestId);
@@ -375,13 +383,28 @@ export const approveCardRequest = (requestId: string): { success: boolean; messa
   const req = requests[reqIndex];
   if (req.status !== 'pending') return { success: false, message: 'تم التعامل مع هذا الطلب مسبقاً!' };
 
+  const users = getUsers();
+  const resellerIndex = users.findIndex((u) => u.id === req.resellerId);
+  if (resellerIndex === -1) return { success: false, message: 'حساب الموزع غير موجود!' };
+
+  const reseller = users[resellerIndex];
+
+  // إعادة تأكيد الرصيد لحظة التفعيل
+  if (reseller.balance < req.totalPrice) {
+    return {
+      success: false,
+      message: `لا يمكن الموافقة! رصيد الموزع الحالي (${reseller.balance} ريال) أصبح أقل من قيمة الطلب (${req.totalPrice} ريال).`,
+    };
+  }
+
   const loans = getLoans();
   const availableLoans = loans.filter((l) => l.packageId === req.packageId && l.status !== 'sold' && !l.assignedTo);
 
   if (availableLoans.length < req.quantity) {
-    return { success: false, message: `المخزون غير كافٍ! المتاح فقط: ${availableLoans.length} كارت.` };
+    return { success: false, message: `المخزون غير كافٍ! المتاح في المخزون العام فقط: ${availableLoans.length} كارت.` };
   }
 
+  // 1. تخصيص الكروت للموزع
   let count = 0;
   for (let i = 0; i < loans.length && count < req.quantity; i++) {
     if (loans[i].packageId === req.packageId && loans[i].status !== 'sold' && !loans[i].assignedTo) {
@@ -390,12 +413,17 @@ export const approveCardRequest = (requestId: string): { success: boolean; messa
     }
   }
 
+  // 2. خصم قيمة الطلب من رصيد الموزع
+  users[resellerIndex].balance -= req.totalPrice;
+  saveUsers(users);
+
+  // 3. تحديث حالة الطلب
   requests[reqIndex].status = 'approved';
   saveLoans(loans);
   saveCardRequests(requests);
   updatePackageLoanCount(req.packageId);
 
-  return { success: true, message: 'تمت الموافقة وتخصيص الكروت للموزع بنجاح!' };
+  return { success: true, message: `تمت الموافقة، وتخصيص ${req.quantity} كروت للموزع، وخصم ${req.totalPrice} ريال من رصيده بنجاح!` };
 };
 
 export const rejectCardRequest = (requestId: string) => {
