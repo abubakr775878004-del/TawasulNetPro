@@ -1,4 +1,4 @@
-import { STORAGE_KEYS, ADMIN_EMAIL, OWNER_NAME, CONTACT_PHONE } from '@/constants';
+import { STORAGE_KEYS, ADMIN_EMAIL, ADMIN_PASSWORD, OWNER_NAME, CONTACT_PHONE } from '@/constants';
 import type { User, Package, Loan, SystemSettings, MikroTikConfig } from '@/types';
 
 // ── Types for Card Requests ────────────────────────────────────────────────
@@ -28,6 +28,17 @@ const write = <T>(key: string, value: T): void => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+// ── Passwords Storage ──────────────────────────────────────────────────────
+const PASSWORDS_KEY = 'tawasulnet_passwords';
+
+export const getPasswords = (): Record<string, string> => read<Record<string, string>>(PASSWORDS_KEY, {});
+
+export const savePassword = (userId: string, pass: string) => {
+  const passwords = getPasswords();
+  passwords[userId] = pass;
+  write(PASSWORDS_KEY, passwords);
+};
+
 // ── Seed defaults ──────────────────────────────────────────────────────────
 const seedDefaultPackages = (): Package[] => [
   { id: 'pkg-200', name: 'باقة 200', value: 200, color: 'sky', loanCount: 0, createdAt: new Date().toISOString() },
@@ -46,27 +57,7 @@ const seedDefaultUsers = (): User[] => [
     createdAt: new Date().toISOString(),
     phone: CONTACT_PHONE,
     balance: 0,
-  },
-  {
-    id: 'reseller-001',
-    name: 'أحمد علي',
-    email: 'ahmed@reseller.com',
-    role: 'reseller',
-    status: 'active',
-    createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-    phone: '771234567',
-    balance: 5000,
-  },
-  {
-    id: 'reseller-002',
-    name: 'محمد حسن',
-    email: 'mohammed@reseller.com',
-    role: 'reseller',
-    status: 'active',
-    createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
-    phone: '779876543',
-    balance: 3200,
-  },
+  }
 ];
 
 const seedDefaultSettings = (): SystemSettings => ({
@@ -104,18 +95,51 @@ export const initStorage = () => {
   if (!localStorage.getItem(STORAGE_KEYS.MIKROTIK)) {
     write(STORAGE_KEYS.MIKROTIK, seedDefaultMikrotik());
   }
+  
+  // حفظ كلمة سر المدير المحددة في الثوابت تلقائياً
+  const passwords = getPasswords();
+  if (!passwords['admin-001']) {
+    savePassword('admin-001', ADMIN_PASSWORD);
+  }
 };
 
-// ── Users ──────────────────────────────────────────────────────────────────
+// ── Users & Auth ──────────────────────────────────────────────────────────
 export const getUsers = (): User[] => read<User[]>(STORAGE_KEYS.USERS, []);
 export const saveUsers = (users: User[]) => write(STORAGE_KEYS.USERS, users);
 
-export const createUser = (data: Omit<User, 'id' | 'createdAt'>): User => {
-  const user: User = { ...data, id: `user-${Date.now()}`, createdAt: new Date().toISOString() };
+// إنشاء موظف/موزع جديد -> تكون حالته 'pending' تلقائياً بانتظار موافقة المدير
+export const createUser = (data: Omit<User, 'id' | 'createdAt'>, password?: string): User => {
+  const user: User = { 
+    ...data, 
+    id: `user-${Date.now()}`, 
+    status: data.role === 'admin' ? 'active' : 'pending', // المدير نشط، والآخرون بانتظار الموافقة
+    createdAt: new Date().toISOString() 
+  };
   const users = getUsers();
   users.push(user);
   saveUsers(users);
+
+  if (password) {
+    savePassword(user.id, password);
+  }
+
   return user;
+};
+
+// دالة فحص وتأكيد بيانات الدخول
+export const validateCredentials = (email: string, pass: string): User | null => {
+  const users = getUsers();
+  const passwords = getPasswords();
+  
+  const user = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+  if (!user) return null;
+
+  const savedPass = passwords[user.id];
+  if (savedPass && savedPass === pass) {
+    return user;
+  }
+  
+  return null;
 };
 
 export const deleteUser = (id: string) => {
@@ -156,7 +180,6 @@ export const updatePackageLoanCount = (packageId: string) => {
 export const getLoans = (): Loan[] => read<Loan[]>(STORAGE_KEYS.LOANS, []);
 export const saveLoans = (loans: Loan[]) => write(STORAGE_KEYS.LOANS, loans);
 
-// جلب الكروت الخاصة بالموزع فقط مع حجب واستبدال أرقام الكروت تماماً بـ ********
 export const getLoansForReseller = (resellerId: string): Loan[] => {
   purgeSoldCardsOlderThan24h();
   const loans = getLoans();
@@ -168,7 +191,6 @@ export const getLoansForReseller = (resellerId: string): Loan[] => {
     }));
 };
 
-// بيع الكرت للزبون: يكشف الكود، يخصم الرصيد، ويبدأ عداد الـ 24 ساعة
 export const sellLoanToCustomer = (loanId: string, resellerId: string): { success: boolean; message: string; loan?: Loan } => {
   const loans = getLoans();
   const loanIndex = loans.findIndex((l) => l.id === loanId && (l.assignedTo === resellerId || l.soldBy === resellerId));
@@ -188,13 +210,11 @@ export const sellLoanToCustomer = (loanId: string, resellerId: string): { succes
     return { success: false, message: `رصيدك غير كافٍ! سعر الكارت: ${cardPrice} - رصيدك الحالي: ${reseller.balance}` };
   }
 
-  // خصم الرصيد من الموزع
   if (reseller.role === 'reseller') {
     users[resellerIndex].balance -= cardPrice;
     saveUsers(users);
   }
 
-  // تحديث حالة الكرت وتغيير تاريخ البيع
   loans[loanIndex].status = 'sold';
   loans[loanIndex].soldAt = new Date().toISOString();
   loans[loanIndex].soldBy = resellerId;
@@ -205,7 +225,6 @@ export const sellLoanToCustomer = (loanId: string, resellerId: string): { succes
   return { success: true, message: 'تم بيع الكارت وخصم الرصيد بنجاح!', loan: loans[loanIndex] };
 };
 
-// للتوافقية مع الأكواد القديمة
 export const markLoanSold = (id: string, soldBy: string) => {
   return sellLoanToCustomer(id, soldBy);
 };
@@ -306,7 +325,7 @@ export const deleteLoansByDate = (date: string, packageId?: string) => {
   return toDelete.length;
 };
 
-// ── Card Requests (نظام طلب الكروت بدون رؤيتها) ────────────────────────────────
+// ── Card Requests ──────────────────────────────────────────────────────────
 const REQUESTS_KEY = 'tawasulnet_requests';
 
 export const getCardRequests = (): CardRequest[] => read<CardRequest[]>(REQUESTS_KEY, []);
