@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  Users, Trash2, Shield, ShieldOff, Search, X, Check, Phone, Mail, Lock
+  Users, Trash2, Shield, ShieldOff, Search, X, Check, Phone, Mail, Lock, Wallet, PlusCircle
 } from 'lucide-react';
 import { getUsers, deleteUser, updateUser } from '@/lib/storage';
 import { formatDate, formatCurrency } from '@/lib/utils';
@@ -20,6 +20,17 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+  // حالة نافذة شحن الرصيد
+  const [topUpModal, setTopUpModal] = useState<{
+    isOpen: boolean;
+    user: User | null;
+    amount: string;
+  }>({
+    isOpen: false,
+    user: null,
+    amount: '',
+  });
+
   const refresh = () => setResellers(getUsers().filter((u) => u.role === 'reseller'));
 
   const filtered = resellers.filter(
@@ -27,6 +38,28 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
       u.name.toLowerCase().includes(search.toLowerCase()) ||
       u.email.toLowerCase().includes(search.toLowerCase())
   );
+
+  // تنفيذ شحن/إضافة الرصيد للموزع
+  const handleTopUpSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!topUpModal.user || !topUpModal.amount) return;
+
+    const amountToAdd = parseFloat(topUpModal.amount);
+    if (isNaN(amountToAdd) || amountToAdd <= 0) {
+      toast.error('يرجى إدخال مبلغ صحيح');
+      return;
+    }
+
+    const currentBalance = topUpModal.user.balance || 0;
+    const newBalance = currentBalance + amountToAdd;
+
+    // تحديث رصيد الموزع في التخزين
+    updateUser(topUpModal.user.id, { balance: newBalance });
+
+    toast.success(`تم إضافة ${formatCurrency(amountToAdd)} لرصيد الموزع (${topUpModal.user.name}) بنجاح`);
+    setTopUpModal({ isOpen: false, user: null, amount: '' });
+    refresh();
+  };
 
   // DELETE /api/resellers/:id — permanently removes a reseller account
   const handleDelete = (id: string) => {
@@ -77,7 +110,7 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">إدارة الموزعين</h1>
-          <p className="text-gray-500 text-sm mt-0.5">عرض وإدارة حسابات الموزعين المسجلين</p>
+          <p className="text-gray-500 text-sm mt-0.5">عرض وإدارة حسابات الموزعين المسجلين وشحن أرباحهم/أرصدتهم</p>
         </div>
         <div className="badge-blue text-sm px-3 py-1.5">
           {resellers.length} موزع مسجل
@@ -171,6 +204,15 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
                     <td className="text-gray-500 text-xs">{formatDate(u.createdAt)}</td>
                     <td>
                       <div className="flex items-center gap-2">
+                        {/* زر شحن الرصيد */}
+                        <button
+                          onClick={() => setTopUpModal({ isOpen: true, user: u, amount: '' })}
+                          className="p-1.5 rounded-lg text-green-400 hover:bg-green-500/10 transition-colors"
+                          title="شحن رصيد الموزع"
+                        >
+                          <Wallet size={15} />
+                        </button>
+
                         {/* Toggle status */}
                         <button
                           onClick={() => handleToggleStatus(u)}
@@ -184,7 +226,7 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
                           {u.status === 'active' ? <ShieldOff size={14} /> : <Shield size={14} />}
                         </button>
 
-                        {/* Delete reseller (DELETE /api/resellers/:id) */}
+                        {/* Delete reseller */}
                         {deleteConfirm === u.id ? (
                           <div className="flex gap-1">
                             <button
@@ -226,9 +268,70 @@ const ResellersPage = ({ user }: ResellersPageProps) => {
         )}
       </div>
 
+      {/* Modal - نافذة شحن الرصيد المنبثقة */}
+      {topUpModal.isOpen && topUpModal.user && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-full max-w-md shadow-2xl dir-rtl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/20 flex items-center justify-center text-green-400">
+                <PlusCircle size={20} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">شحن رصيد الموزع</h3>
+                <p className="text-xs text-gray-400">إضافة مبلغ مالي لرصيد الموزع لشراء الكروت</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800/80 mb-5 space-y-1">
+              <p className="text-gray-400 text-xs">
+                اسم الموزع: <span className="text-white font-medium">{topUpModal.user.name}</span>
+              </p>
+              <p className="text-gray-400 text-xs">
+                الرصيد الحالي: <span className="text-neon-green font-bold">{formatCurrency(topUpModal.user.balance || 0)}</span>
+              </p>
+            </div>
+
+            <form onSubmit={handleTopUpSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                  المبلغ المراد إضافته (بالريال):
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={topUpModal.amount}
+                  onChange={(e) => setTopUpModal({ ...topUpModal, amount: e.target.value })}
+                  placeholder="مثال: 5000"
+                  className="input-field text-lg font-bold text-white text-center"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 bg-green-600 hover:bg-green-500 text-white font-medium py-2.5 rounded-xl transition-all shadow-lg shadow-green-600/20 text-sm"
+                >
+                  إيداع الرصيد
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTopUpModal({ isOpen: false, user: null, amount: '' })}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-gray-300 font-medium py-2.5 rounded-xl transition-all text-sm"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="p-4 rounded-xl bg-sky-500/5 border border-sky-500/15">
         <p className="text-gray-400 text-sm">
-          💡 يمكن للموزعين التسجيل مباشرة من صفحة تسجيل الدخول. بعد التسجيل يمكنك إدارة حساباتهم من هذه الصفحة.
+          💡 يمكنك النقر على أيقونة المحفظة الأخضراء <Wallet size={14} className="inline text-green-400" /> في خانة الإجراءات لشحن رصيد أي موزع بشكل مباشر.
         </p>
       </div>
     </div>
