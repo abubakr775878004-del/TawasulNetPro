@@ -164,7 +164,6 @@ export const getLoansForReseller = (resellerId: string): Loan[] => {
     .filter((l) => l.assignedTo === resellerId || l.soldBy === resellerId)
     .map((l) => ({
       ...l,
-      // كشف الرقم فقط إذا تم البيع بالفعل، وإلا يظل محجوباً تماماً
       code: l.status === 'sold' ? l.code : '********',
     }));
 };
@@ -204,6 +203,11 @@ export const sellLoanToCustomer = (loanId: string, resellerId: string): { succes
   updatePackageLoanCount(loans[loanIndex].packageId);
 
   return { success: true, message: 'تم بيع الكارت وخصم الرصيد بنجاح!', loan: loans[loanIndex] };
+};
+
+// للتوافقية مع الأكواد القديمة
+export const markLoanSold = (id: string, soldBy: string) => {
+  return sellLoanToCustomer(id, soldBy);
 };
 
 const normalizeCode = (code: string): string => code.trim().toLowerCase();
@@ -308,7 +312,6 @@ const REQUESTS_KEY = 'tawasulnet_requests';
 export const getCardRequests = (): CardRequest[] => read<CardRequest[]>(REQUESTS_KEY, []);
 export const saveCardRequests = (requests: CardRequest[]) => write(REQUESTS_KEY, requests);
 
-// إنشاء طلب كروت من قبل الموزع
 export const createCardRequest = (
   resellerId: string,
   resellerName: string,
@@ -334,7 +337,6 @@ export const createCardRequest = (
   return req;
 };
 
-// موافقة المدير وتخصيص الكروت للموزع مع بقائها مجهولة وأرقامها محجوبة
 export const approveCardRequest = (requestId: string): { success: boolean; message: string } => {
   const requests = getCardRequests();
   const reqIndex = requests.findIndex((r) => r.id === requestId);
