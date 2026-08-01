@@ -78,11 +78,25 @@ const seedDefaultMikrotik = (): MikroTikConfig => ({
   isConnected: false,
 });
 
-// ── Init ───────────────────────────────────────────────────────────────────
+// ── Init (تهيئة التخزين وتحديث بريد المدير تلقائياً) ─────────────────────────
 export const initStorage = () => {
-  if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
+  const currentUsers = read<User[]>(STORAGE_KEYS.USERS, []);
+  
+  if (currentUsers.length === 0) {
     write(STORAGE_KEYS.USERS, seedDefaultUsers());
+  } else {
+    // تحديث بيانات المدير في التخزين المحلي بالبريد وكلمة السر المحددة في الثوابت
+    const adminIndex = currentUsers.findIndex(u => u.id === 'admin-001' || u.role === 'admin');
+    if (adminIndex !== -1) {
+      currentUsers[adminIndex].email = ADMIN_EMAIL;
+      currentUsers[adminIndex].name = OWNER_NAME;
+      write(STORAGE_KEYS.USERS, currentUsers);
+    } else {
+      currentUsers.unshift(seedDefaultUsers()[0]);
+      write(STORAGE_KEYS.USERS, currentUsers);
+    }
   }
+
   if (!localStorage.getItem(STORAGE_KEYS.PACKAGES)) {
     write(STORAGE_KEYS.PACKAGES, seedDefaultPackages());
   }
@@ -97,10 +111,7 @@ export const initStorage = () => {
   }
   
   // حفظ كلمة سر المدير المحددة في الثوابت تلقائياً
-  const passwords = getPasswords();
-  if (!passwords['admin-001']) {
-    savePassword('admin-001', ADMIN_PASSWORD);
-  }
+  savePassword('admin-001', ADMIN_PASSWORD);
 };
 
 // ── Users & Auth ──────────────────────────────────────────────────────────
