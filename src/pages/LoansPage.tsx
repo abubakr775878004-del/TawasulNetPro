@@ -2,13 +2,14 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   CreditCard, Plus, Upload, Trash2, FileText, X, Check,
   Filter, Calendar, AlertCircle, Lock, CheckSquare, Square, Layers,
-  ClipboardList, ShoppingCart, Eye, EyeOff
+  ClipboardList, ShoppingCart, Eye, EyeOff, Send, Clock, CheckCircle
 } from 'lucide-react';
 import {
   getLoans, getPackages, createLoan, createLoans,
   deleteLoan, deleteLoansByDate, saveLoans, updatePackageLoanCount,
-  markLoanSold, purgeSoldCardsOlderThan24h
+  markLoanSold, purgeSoldCardsOlderThan24h, createCardRequest, getCardRequests
 } from '@/lib/storage';
+import type { CardRequest } from '@/lib/storage';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Loan, Package, User } from '@/types';
@@ -46,9 +47,28 @@ const ResellerView = ({ user }: { user: User }) => {
   const [packages] = useState(() => getPackages());
   const [loans, setLoans] = useState(() => getLoans());
   const [soldConfirm, setSoldConfirm] = useState<string | null>(null);
+  const [requests, setRequests] = useState<CardRequest[]>(() => 
+    getCardRequests().filter(r => r.resellerId === user.id)
+  );
+
+  // حالات مودال طلب كروت من المدير
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [requestPkgId, setRequestPkgId] = useState(packages[0]?.id || '');
+  const [requestQty, setRequestQty] = useState(1);
+  const [requestError, setRequestError] = useState('');
+  const [requestSuccess, setRequestSuccess] = useState('');
 
   // Purge expired sold cards on mount
-  useEffect(() => { purgeSoldCardsOlderThan24h(); setLoans(getLoans()); }, []);
+  useEffect(() => { 
+    purgeSoldCardsOlderThan24h(); 
+    setLoans(getLoans()); 
+    setRequests(getCardRequests().filter(r => r.resellerId === user.id));
+  }, [user.id]);
+
+  const refreshData = () => {
+    setLoans(getLoans());
+    setRequests(getCardRequests().filter(r => r.resellerId === user.id));
+  };
 
   // Cards sold by THIS reseller still within 24h window
   const mySold = loans.filter(
@@ -62,11 +82,59 @@ const ResellerView = ({ user }: { user: User }) => {
     setLoans(getLoans());
   };
 
+  // دالة إرسال الطلب مع فحص الرصيد
+  const handleSendCardRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    setRequestError('');
+    setRequestSuccess('');
+
+    const pkg = packages.find(p => p.id === requestPkgId);
+    if (!pkg) {
+      setRequestError('يرجى اختيار الباقة المطلوبة');
+      return;
+    }
+
+    const result = createCardRequest(
+      user.id,
+      user.name,
+      pkg.id,
+      pkg.name,
+      requestQty,
+      pkg.value
+    );
+
+    if (!result.success) {
+      setRequestError(result.message);
+    } else {
+      setRequestSuccess(result.message);
+      toast.success(result.message);
+      setTimeout(() => {
+        setIsRequestModalOpen(false);
+        setRequestSuccess('');
+        refreshData();
+      }, 1500);
+    }
+  };
+
+  const currentPkg = packages.find(p => p.id === requestPkgId);
+  const calculatedTotal = currentPkg ? currentPkg.value * requestQty : 0;
+
   return (
     <div className="space-y-6" dir="rtl">
-      <div>
-        <h1 className="text-2xl font-bold text-white">الباقات المتاحة</h1>
-        <p className="text-gray-500 text-sm mt-0.5">عرض الباقات المتوفرة وعدد البطاقات في المخزون</p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">الباقات المتاحة</h1>
+          <p className="text-gray-500 text-sm mt-0.5">عرض الباقات المتوفرة وعدد البطاقات في المخزون</p>
+        </div>
+
+        {/* زر طلب كروت من المدير */}
+        <button
+          onClick={() => setIsRequestModalOpen(true)}
+          className="flex items-center gap-2 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-4 py-2 rounded-xl font-medium shadow-lg transition-all"
+        >
+          <Send className="w-4 h-4" />
+          طلب كروت من المدير
+        </button>
       </div>
 
       {/* Package availability cards — NO codes shown */}
@@ -219,6 +287,140 @@ const ResellerView = ({ user }: { user: User }) => {
           </div>
         )}
       </div>
+
+      {/* سجل طلبات الموزع السابقة */}
+      {requests.length > 0 && (
+        <div className="card-bg rounded-xl overflow-hidden mt-6">
+          <div className="p-4 border-b border-border">
+            <h3 className="text-white font-semibold text-sm">سجل طلباتي من المدير</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>الباقة</th>
+                  <th>الكمية</th>
+                  <th>الإجمالي</th>
+                  <th>التاريخ</th>
+                  <th>الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map((req) => (
+                  <tr key={req.id}>
+                    <td className="text-gray-300 text-sm">{req.packageName}</td>
+                    <td className="text-gray-300 text-sm">{req.quantity}</td>
+                    <td className="text-sky-400 font-bold text-sm">{req.totalPrice} ريال</td>
+                    <td className="text-gray-500 text-xs">{new Date(req.createdAt).toLocaleDateString('ar-YE')}</td>
+                    <td>
+                      {req.status === 'pending' && (
+                        <span className="flex items-center gap-1 text-amber-400 text-xs bg-amber-500/10 px-2.5 py-1 rounded-full w-fit border border-amber-500/20">
+                          <Clock className="w-3 h-3" /> بانتظار المدير
+                        </span>
+                      )}
+                      {req.status === 'approved' && (
+                        <span className="flex items-center gap-1 text-emerald-400 text-xs bg-emerald-500/10 px-2.5 py-1 rounded-full w-fit border border-emerald-500/20">
+                          <CheckCircle className="w-3 h-3" /> تمت الموافقة والخصم
+                        </span>
+                      )}
+                      {req.status === 'rejected' && (
+                        <span className="flex items-center gap-1 text-red-400 text-xs bg-red-500/10 px-2.5 py-1 rounded-full w-fit border border-red-500/20">
+                          <AlertCircle className="w-3 h-3" /> مرفوض
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal طلب كروت من المدير */}
+      {isRequestModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="card-bg border border-border rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-border pb-3">
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                <Send className="w-5 h-5 text-sky-400" />
+                طلب كروت جديدة من المدير
+              </h3>
+              <button 
+                onClick={() => setIsRequestModalOpen(false)}
+                className="text-gray-400 hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-muted p-3 rounded-xl flex justify-between items-center text-sm border border-border">
+              <span className="text-gray-400">رصيدك الحالي:</span>
+              <span className="text-emerald-400 font-bold text-base">{user.balance} ريال</span>
+            </div>
+
+            {requestError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                {requestError}
+              </div>
+            )}
+            {requestSuccess && (
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-sm">
+                {requestSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handleSendCardRequest} className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">اختر الباقة</label>
+                <select
+                  value={requestPkgId}
+                  onChange={(e) => setRequestPkgId(e.target.value)}
+                  className="input-field"
+                >
+                  {packages.map((pkg) => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.name} — ({pkg.value} ريال)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">الكمية المطلوبة</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={requestQty}
+                  onChange={(e) => setRequestQty(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="input-field"
+                />
+              </div>
+
+              <div className="border-t border-border pt-3 flex justify-between items-center">
+                <span className="text-gray-400">إجمالي المبلغ المطلوب:</span>
+                <span className="text-xl font-bold text-sky-400">{calculatedTotal} ريال</span>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  className="btn-primary flex-1 py-2.5 rounded-xl transition shadow-lg"
+                >
+                  إرسال الطلب
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRequestModalOpen(false)}
+                  className="px-5 bg-muted text-gray-300 rounded-xl hover:bg-border transition"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
