@@ -1,6 +1,13 @@
 import { STORAGE_KEYS, ADMIN_EMAIL, ADMIN_PASSWORD, OWNER_NAME, CONTACT_PHONE } from '@/constants';
 import type { User, Package, Loan, SystemSettings, MikroTikConfig } from '@/types';
 
+// ── 1. إصدار قاعدة البيانات ونظام الحماية ─────────────────────────────────────
+export const DATABASE_VERSION = '2.0';
+const DB_VERSION_KEY = 'tawasulnet_db_version';
+const BACKUP_KEY = 'tawasulnet_auto_backup';
+const PASSWORDS_KEY = 'tawasulnet_passwords';
+const REQUESTS_KEY = 'tawasulnet_requests';
+
 // ── Types for Card Requests ────────────────────────────────────────────────
 export interface CardRequest {
   id: string;
@@ -14,28 +21,98 @@ export interface CardRequest {
   createdAt: string;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Helpers (مع فحص الحماية والدمج) ──────────────────────────────────────────
 const read = <T>(key: string, fallback: T): T => {
   try {
     const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
+  } catch (error) {
+    console.error(`خطأ في قراءة المفتاح ${key}، جاري استخدام القيمة الافتراضية`, error);
     return fallback;
   }
 };
 
+// كتابة البيانات مع عمل نسخة احتياطية فورية لحمايتها
 const write = <T>(key: string, value: T): void => {
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    createAutoBackup(); // حفظ نسخة احتياطية تلقائية مع كل تغيير
+  } catch (error) {
+    console.error(`خطأ أثناء الكتابة في LocalStorage للمفتاح: ${key}`, error);
+  }
+};
+
+// ── 2. نظام النسخ الاحتياطي التلقائي واسترجاع البيانات ───────────────────────
+export const createAutoBackup = () => {
+  try {
+    const backupData = {
+      timestamp: new Date().toISOString(),
+      version: DATABASE_VERSION,
+      users: localStorage.getItem(STORAGE_KEYS.USERS),
+      packages: localStorage.getItem(STORAGE_KEYS.PACKAGES),
+      loans: localStorage.getItem(STORAGE_KEYS.LOANS),
+      settings: localStorage.getItem(STORAGE_KEYS.SETTINGS),
+      mikrotik: localStorage.getItem(STORAGE_KEYS.MIKROTIK),
+      passwords: localStorage.getItem(PASSWORDS_KEY),
+      requests: localStorage.getItem(REQUESTS_KEY),
+    };
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(backupData));
+  } catch (e) {
+    console.warn("تعذر إنشاء نسخة احتياطية تلقائية", e);
+  }
+};
+
+// استرجاع البيانات تلقائياً في حال حدوث تلف
+export const restoreFromBackup = (): boolean => {
+  try {
+    const rawBackup = localStorage.getItem(BACKUP_KEY);
+    if (!rawBackup) return false;
+
+    const backup = JSON.parse(rawBackup);
+    if (backup.users) localStorage.setItem(STORAGE_KEYS.USERS, backup.users);
+    if (backup.packages) localStorage.setItem(STORAGE_KEYS.PACKAGES, backup.packages);
+    if (backup.loans) localStorage.setItem(STORAGE_KEYS.LOANS, backup.loans);
+    if (backup.settings) localStorage.setItem(STORAGE_KEYS.SETTINGS, backup.settings);
+    if (backup.mikrotik) localStorage.setItem(STORAGE_KEYS.MIKROTIK, backup.mikrotik);
+    if (backup.passwords) localStorage.setItem(PASSWORDS_KEY, backup.passwords);
+    if (backup.requests) localStorage.setItem(REQUESTS_KEY, backup.requests);
+
+    console.log("تم استرجاع البيانات بنجاح من النسخة الاحتياطية!");
+    return true;
+  } catch (e) {
+    console.error("فشل استرجاع البيانات من النسخة الاحتياطية", e);
+    return false;
+  }
+};
+
+// ── 3. نظام سلامة البيانات ونقل الإصدارات (Migration) ───────────────────────
+export const checkStorageIntegrity = () => {
+  const currentVersion = localStorage.getItem(DB_VERSION_KEY);
+
+  // إذا كان إصدار قاعدة البيانات قديم أو غير موجود (Migration Process)
+  if (currentVersion !== DATABASE_VERSION) {
+    console.log(`ترقية قاعدة البيانات من ${currentVersion || '1.0'} إلى ${DATABASE_VERSION}...`);
+    
+    // إنشاء نسخة احتياطية من البيانات القديمة قبل أي تعديل
+    createAutoBackup();
+
+    // تحديث رقم الإصدار بدون مسح أي حقل قديم
+    localStorage.setItem(DB_VERSION_KEY, DATABASE_VERSION);
+  }
+
+  // التأكد من عدم فرغ البيانات الأساسية واستعادتها إن تضررت
+  const users = read<User[]>(STORAGE_KEYS.USERS, []);
+  if (users.length === 0 && localStorage.getItem(BACKUP_KEY)) {
+    restoreFromBackup();
+  }
 };
 
 // ── Passwords Storage ──────────────────────────────────────────────────────
-const PASSWORDS_KEY = 'tawasulnet_passwords';
-
 export const getPasswords = (): Record<string, string> => read<Record<string, string>>(PASSWORDS_KEY, {});
 
 export const savePassword = (userId: string, pass: string) => {
   const passwords = getPasswords();
-  passwords[userId] = pass;
+  passwords[userId] = pass.trim(); // تنظيف كلمة السر من المسافات
   write(PASSWORDS_KEY, passwords);
 };
 
@@ -78,14 +155,16 @@ const seedDefaultMikrotik = (): MikroTikConfig => ({
   isConnected: false,
 });
 
-// ── Init (تهيئة التخزين وتحديث بريد المدير تلقائياً) ─────────────────────────
+// ── Init (تهيئة التخزين وتشغيل الفحص الآلي) ───────────────────────────────────
 export const initStorage = () => {
+  // 1. تشغيل فحص سلامة البيانات ونقل الإصدار (Protection & Migration)
+  checkStorageIntegrity();
+
   const currentUsers = read<User[]>(STORAGE_KEYS.USERS, []);
   
   if (currentUsers.length === 0) {
     write(STORAGE_KEYS.USERS, seedDefaultUsers());
   } else {
-    // تحديث بيانات المدير في التخزين المحلي بالبريد وكلمة السر المحددة في الثوابت
     const adminIndex = currentUsers.findIndex(u => u.id === 'admin-001' || u.role === 'admin');
     if (adminIndex !== -1) {
       currentUsers[adminIndex].email = ADMIN_EMAIL;
@@ -110,20 +189,18 @@ export const initStorage = () => {
     write(STORAGE_KEYS.MIKROTIK, seedDefaultMikrotik());
   }
   
-  // حفظ كلمة سر المدير المحددة في الثوابت تلقائياً
   savePassword('admin-001', ADMIN_PASSWORD);
 };
 
-// ── Users & Auth ──────────────────────────────────────────────────────────
+// ── Users & Auth (معدلة لتنظيف المدخلات وحل مشكلة كلمة السر) ────────────────
 export const getUsers = (): User[] => read<User[]>(STORAGE_KEYS.USERS, []);
 export const saveUsers = (users: User[]) => write(STORAGE_KEYS.USERS, users);
 
-// إنشاء موظف/موزع جديد -> تكون حالته 'pending' تلقائياً بانتظار موافقة المدير
 export const createUser = (data: Omit<User, 'id' | 'createdAt'>, password?: string): User => {
   const user: User = { 
     ...data, 
     id: `user-${Date.now()}`, 
-    status: data.role === 'admin' ? 'active' : 'pending', // المدير نشط، والآخرون بانتظار الموافقة
+    status: data.role === 'admin' ? 'active' : 'pending',
     createdAt: new Date().toISOString() 
   };
   const users = getUsers();
@@ -131,22 +208,25 @@ export const createUser = (data: Omit<User, 'id' | 'createdAt'>, password?: stri
   saveUsers(users);
 
   if (password) {
-    savePassword(user.id, password);
+    savePassword(user.id, password.trim());
   }
 
   return user;
 };
 
-// دالة فحص وتأكيد بيانات الدخول
+// دالة فحص وتأكيد بيانات الدخول (حل مشكلة عدم قدرة الموزع على الدخول)
 export const validateCredentials = (email: string, pass: string): User | null => {
   const users = getUsers();
   const passwords = getPasswords();
   
-  const user = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = pass.trim();
+
+  const user = users.find((u) => u.email.trim().toLowerCase() === cleanEmail);
   if (!user) return null;
 
   const savedPass = passwords[user.id];
-  if (savedPass && savedPass === pass) {
+  if (savedPass && savedPass.trim() === cleanPass) {
     return user;
   }
   
@@ -187,7 +267,7 @@ export const updatePackageLoanCount = (packageId: string) => {
   savePackages(getPackages().map((p) => (p.id === packageId ? { ...p, loanCount: count } : p)));
 };
 
-// ── Loans (الكروت وحمايتها) ─────────────────────────────────────────────────
+// ── Loans (الكروت) ─────────────────────────────────────────────────────────
 export const getLoans = (): Loan[] => read<Loan[]>(STORAGE_KEYS.LOANS, []);
 export const saveLoans = (loans: Loan[]) => write(STORAGE_KEYS.LOANS, loans);
 
@@ -290,7 +370,6 @@ export const deleteLoan = (id: string) => {
   if (loan) updatePackageLoanCount(loan.packageId);
 };
 
-// ── 24-hour sold-card auto-purge ──────────────────────────────────────────
 export const purgeSoldCardsOlderThan24h = (): number => {
   const loans = getLoans();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -324,12 +403,9 @@ export const deleteLoansByDate = (date: string, packageId?: string) => {
 };
 
 // ── Card Requests ──────────────────────────────────────────────────────────
-const REQUESTS_KEY = 'tawasulnet_requests';
-
 export const getCardRequests = (): CardRequest[] => read<CardRequest[]>(REQUESTS_KEY, []);
 export const saveCardRequests = (requests: CardRequest[]) => write(REQUESTS_KEY, requests);
 
-// إنشاء طلب كروت جديد (مع فحص الرصيد أولاً)
 export const createCardRequest = (
   resellerId: string,
   resellerName: string,
@@ -347,7 +423,6 @@ export const createCardRequest = (
 
   const totalPrice = quantity * unitPrice;
 
-  // فحص الرصيد: يمنع تقديم الطلب إن لم يكن الرصيد كافياً
   if (reseller.balance < totalPrice) {
     return {
       success: false,
@@ -374,7 +449,6 @@ export const createCardRequest = (
   return { success: true, message: 'تم إرسال الطلب للمدير بنجاح وفي انتظار الموافقة.', req };
 };
 
-// موافقة المدير على الطلب (تخصيص الكروت + خصم الرصيد)
 export const approveCardRequest = (requestId: string): { success: boolean; message: string } => {
   const requests = getCardRequests();
   const reqIndex = requests.findIndex((r) => r.id === requestId);
@@ -389,7 +463,6 @@ export const approveCardRequest = (requestId: string): { success: boolean; messa
 
   const reseller = users[resellerIndex];
 
-  // إعادة تأكيد الرصيد لحظة التفعيل
   if (reseller.balance < req.totalPrice) {
     return {
       success: false,
@@ -404,7 +477,6 @@ export const approveCardRequest = (requestId: string): { success: boolean; messa
     return { success: false, message: `المخزون غير كافٍ! المتاح في المخزون العام فقط: ${availableLoans.length} كارت.` };
   }
 
-  // 1. تخصيص الكروت للموزع
   let count = 0;
   for (let i = 0; i < loans.length && count < req.quantity; i++) {
     if (loans[i].packageId === req.packageId && loans[i].status !== 'sold' && !loans[i].assignedTo) {
@@ -413,11 +485,9 @@ export const approveCardRequest = (requestId: string): { success: boolean; messa
     }
   }
 
-  // 2. خصم قيمة الطلب من رصيد الموزع
   users[resellerIndex].balance -= req.totalPrice;
   saveUsers(users);
 
-  // 3. تحديث حالة الطلب
   requests[reqIndex].status = 'approved';
   saveLoans(loans);
   saveCardRequests(requests);
@@ -431,9 +501,17 @@ export const rejectCardRequest = (requestId: string) => {
   saveCardRequests(requests.map((r) => (r.id === requestId ? { ...r, status: 'rejected' } : r)));
 };
 
-// ── Settings & MikroTik ────────────────────────────────────────────────────
+// ── Settings & MikroTik (تعديل جزئي يمنع مسح الخيارات القديمة) ───────────────
 export const getSettings = (): SystemSettings => read<SystemSettings>(STORAGE_KEYS.SETTINGS, seedDefaultSettings());
-export const saveSettings = (s: SystemSettings) => write(STORAGE_KEYS.SETTINGS, s);
+export const saveSettings = (s: Partial<SystemSettings>) => {
+  const current = getSettings();
+  const updated = { ...current, ...s }; // الدمج الجزئي لمنع الضياع
+  write(STORAGE_KEYS.SETTINGS, updated);
+};
 
 export const getMikrotik = (): MikroTikConfig => read<MikroTikConfig>(STORAGE_KEYS.MIKROTIK, seedDefaultMikrotik());
-export const saveMikrotik = (m: MikroTikConfig) => write(STORAGE_KEYS.MIKROTIK, m);
+export const saveMikrotik = (m: Partial<MikroTikConfig>) => {
+  const current = getMikrotik();
+  const updated = { ...current, ...m }; // الدمج الجزئي
+  write(STORAGE_KEYS.MIKROTIK, updated);
+};
