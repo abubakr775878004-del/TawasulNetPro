@@ -34,7 +34,7 @@ const loadPdfjs = async () => {
 // 🟢 فلتر أرقام الهواتف الشامل (استبعاد الهواتف المحلية والدولية)
 const PHONE_RE = /^(?:0?7[0-9]{8}|7[0-9]{8}|9677[0-9]{8}|009677[0-9]{8})$/;
 
-// 🟢 دالة استخراج الأكواد المقبولة للنصوص العادية من 4 خانات وفوق
+// 🟢 دالة استخراج الأكواد المقبولة للنصوص العادية والمجمعة من 4 خانات وفوق
 const extractCodesFromText = (text: string): string[] => {
   return text
     .split(/[\n\r]+/)
@@ -1042,7 +1042,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
                     <tbody>
                       {filteredLoans.map((loan) => (
                         <tr key={loan.id} onClick={() => toggleBulkSelect(loan.id)} className={`cursor-pointer ${bulkSelected.has(loan.id) ? 'bg-red-500/5' : ''}`}>
-                          <td><div className={`w-4 h-4 rounded border flex items-center justify-center ${bulkSelected.has(loan.id) ? 'bg-red-500 border-red-500' : 'border-red-500'}`}>{bulkSelected.has(loan.id) && <Check size={10} className="text-white" />}</div></td>
+                          <td><div className={`w-4 h-4 rounded border flex items-center justify-center ${bulkSelected.has(loan.id) ? 'bg-red-500 border-red-500' : 'border-border'}`}>{bulkSelected.has(loan.id) && <Check size={10} className="text-white" />}</div></td>
                           <td><code className="text-sky-400 text-xs bg-sky-500/10 px-2 py-0.5 rounded">{loan.code}</code></td>
                           <td className="text-gray-300 text-sm">{loan.packageName}</td>
                           <td className="text-gray-500 text-xs">{formatDate(loan.addedAt)}</td>
