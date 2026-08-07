@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import {
   Package, CreditCard, Users, TrendingUp, Activity,
-  Zap, Globe, RefreshCw, BarChart3, ShoppingBag, Wallet, CheckCircle2, AlertCircle, Check, X
+  Zap, Globe, RefreshCw, BarChart3, ShoppingBag, Wallet, CheckCircle2, AlertCircle, Check, X, Eye
 } from 'lucide-react';
-import { getPackages, getLoans, getUsers, createCardRequest, getCardRequests, approveCardRequest, rejectCardRequest } from '@/lib/storage';
+import { getPackages, getLoans, getUsers, createCardRequest, getCardRequests, approveCardRequest, rejectCardRequest, sellLoanToCustomer } from '@/lib/storage';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import type { User, Package as PackageType } from '@/types';
+import type { User, Package as PackageType, Loan } from '@/types';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
@@ -55,12 +55,14 @@ const MetricCard = ({
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reseller dashboard: Allows requesting cards based on user balance
+// Reseller dashboard: عرض رصيد الموزع، باقاته، كروته الخاصة، وزر البيع والطلب
 // ─────────────────────────────────────────────────────────────────────────────
 const ResellerDashboard = ({ user }: DashboardPageProps) => {
   const [refreshKey, setRefreshKey] = useState(0);
-  const [selectedPkg, setSelectedPkg] = useState<PackageType | null>(null);
+  const [selectedPkgForRequest, setSelectedPkgForRequest] = useState<PackageType | null>(null);
+  const [selectedPkgForSell, setSelectedPkgForSell] = useState<PackageType | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
+  const [soldCardResult, setSoldCardResult] = useState<Loan | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const currentUser = useMemo(() => {
@@ -68,21 +70,23 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
     return users.find((u) => u.id === user.id) || user;
   }, [refreshKey, user]);
 
-  const { packages, assignedLoansCount } = useMemo(() => {
+  const { packages, myAssignedLoans } = useMemo(() => {
     const pkgs = getPackages();
     const loans = getLoans();
-    const myLoans = loans.filter((l) => l.assignedTo === currentUser.id && l.status !== 'sold');
+    // جلب الكروت المخصصة لهذا الموزع فقط والتي لم تُباع بعد
+    const assigned = loans.filter((l) => l.assignedTo === currentUser.id && l.status !== 'sold');
     return {
       packages: pkgs,
-      assignedLoansCount: myLoans.length,
+      myAssignedLoans: assigned,
     };
   }, [refreshKey, currentUser.id]);
 
+  // إرسال طلب شراء كروت للمدير
   const handleSendRequest = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPkg || quantity <= 0) return;
+    if (!selectedPkgForRequest || quantity <= 0) return;
 
-    const totalPrice = quantity * selectedPkg.value;
+    const totalPrice = quantity * selectedPkgForRequest.value;
 
     if (currentUser.balance < totalPrice) {
       setStatusMsg({
@@ -95,10 +99,10 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
     const res = createCardRequest(
       currentUser.id,
       currentUser.name,
-      selectedPkg.id,
-      selectedPkg.name,
+      selectedPkgForRequest.id,
+      selectedPkgForRequest.name,
       quantity,
-      selectedPkg.value
+      selectedPkgForRequest.value
     );
 
     if (res.success) {
@@ -109,17 +113,37 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
       setStatusMsg({ type: 'error', text: res.message });
     }
 
-    setSelectedPkg(null);
+    setSelectedPkgForRequest(null);
     setQuantity(1);
     setRefreshKey((k) => k + 1);
   };
 
+  // بيع كرت من الباقة للزبون
+  const handleSellCard = (packageId: string) => {
+    // العثور على أول كرت متاح ومخصص لهذا الموزع ضمن هذه الباقة
+    const availableLoan = myAssignedLoans.find((l) => l.packageId === packageId);
+    if (!availableLoan) {
+      toast.error('لا توجد كروت متاحة لديك في هذه الباقة حالياً!');
+      return;
+    }
+
+    const result = sellLoanToCustomer(availableLoan.id, currentUser.id);
+    if (result.success && result.loan) {
+      setSoldCardResult(result.loan);
+      toast.success('تم بيع الكرت بنجاح وإظهار كوده!');
+      setRefreshKey((k) => k + 1);
+    } else {
+      toast.error(result.message || 'فشل عملية البيع');
+    }
+  };
+
   return (
     <div className="space-y-6" dir="rtl">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">لوحة الموزعين</h1>
-          <p className="text-gray-400 text-sm mt-0.5">مرحباً {currentUser.name} — يمكنك طلب الكروت المباشرة من رصيدك</p>
+          <p className="text-gray-400 text-sm mt-0.5">مرحباً {currentUser.name} — رصيدك وكروتك المخصصة</p>
         </div>
         <button
           onClick={() => setRefreshKey((k) => k + 1)}
@@ -130,32 +154,28 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
       </div>
 
       {statusMsg && (
-        <div
-          className={`p-4 rounded-xl border flex items-center gap-3 text-sm ${
-            statusMsg.type === 'success'
-              ? 'bg-green-950/40 border-green-700 text-green-200'
-              : 'bg-red-950/40 border-red-700 text-red-200'
-          }`}
-        >
+        <div className={`p-4 rounded-xl border flex items-center gap-3 text-sm ${statusMsg.type === 'success' ? 'bg-green-950/40 border-green-700 text-green-200' : 'bg-red-950/40 border-red-700 text-red-200'}`}>
           {statusMsg.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
           <span>{statusMsg.text}</span>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <MetricCard icon={Wallet} label="رصيدك الحالي" value={formatCurrency(currentUser.balance || 0)} sub="متوفر للشراء والطلب" color="green" />
-        <MetricCard icon={CreditCard} label="الكروت المخصصة لك" value={assignedLoansCount} sub="جاهزة للبيع للزبائن" color="sky" />
-        <MetricCard icon={Package} label="الباقات المتاحة" value={packages.length} sub="فئات جاهزة للطلب" color="purple" />
+        <MetricCard icon={CreditCard} label="إجمالي كروتك المخصصة" value={myAssignedLoans.length} sub="موزعة في حسابك وجاهزة للبيع" color="sky" />
       </div>
 
+      {/* Packages Grid: عرض كل باقة مع رصيد الكروت المخصصة وزر البيع وزر الطلب */}
       <h2 className="text-lg font-bold text-white mt-8 mb-4 flex items-center gap-2">
         <ShoppingBag size={20} className="text-sky-400" />
-        طلب كروت جديدة من رصيدك
+        الباقات المتاحة وكروتك الخاصة
       </h2>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {packages.map((pkg) => {
-          const availableInNetwork = getLoans().filter((l) => l.packageId === pkg.id && l.status !== 'sold' && !l.assignedTo).length;
+          // عدد الكروت الخاصة بهذا الموزع في هذه الباقة بالذات
+          const myPkgLoansCount = myAssignedLoans.filter((l) => l.packageId === pkg.id).length;
 
           return (
             <div key={pkg.id} className="bg-slate-900/80 rounded-xl p-5 border border-slate-800 hover:border-sky-500/40 transition-all flex flex-col justify-between">
@@ -166,37 +186,80 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
                   </div>
                   <div>
                     <h3 className="text-white font-bold">{pkg.name}</h3>
-                    <p className="text-gray-400 text-xs">سعر الكارت</p>
+                    <p className="text-gray-400 text-xs">سعر الكارت: {pkg.value} ريال</p>
                   </div>
                 </div>
 
+                {/* عرض عدد الكروت المخصصة للموزع في هذه الباقة */}
                 <div className="my-4 bg-slate-950/60 p-3 rounded-lg border border-slate-800/80 flex items-center justify-between">
-                  <span className="text-sky-400 font-bold text-xl">{pkg.value} ريال</span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${availableInNetwork > 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
-                    {availableInNetwork > 0 ? `متاح: ${availableInNetwork}` : 'غير متوفر'}
+                  <span className="text-gray-400 text-xs">كروتك المخصصة:</span>
+                  <span className={`text-sm font-bold px-2.5 py-1 rounded-lg ${myPkgLoansCount > 0 ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-slate-800 text-gray-400'}`}>
+                    {myPkgLoansCount} كرت
                   </span>
                 </div>
               </div>
 
-              <button
-                onClick={() => {
-                  setStatusMsg(null);
-                  setSelectedPkg(pkg);
-                }}
-                className="w-full mt-2 bg-sky-600 hover:bg-sky-500 text-white font-medium py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-lg shadow-sky-600/20"
-              >
-                <ShoppingBag size={16} /> طلب كمية
-              </button>
+              <div className="space-y-2 mt-2">
+                {/* زر بيع كرت من هذه الباقة */}
+                <button
+                  onClick={() => handleSellCard(pkg.id)}
+                  disabled={myPkgLoansCount === 0}
+                  className={`w-full py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-sm shadow-lg ${
+                    myPkgLoansCount > 0
+                      ? 'bg-green-600 hover:bg-green-500 text-white shadow-green-600/20'
+                      : 'bg-slate-800 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Eye size={16} /> بيع كرت للزبون
+                </button>
+
+                {/* زر طلب كمية جديدة من هذه الباقة */}
+                <button
+                  onClick={() => {
+                    setStatusMsg(null);
+                    setSelectedPkgForRequest(pkg);
+                  }}
+                  className="w-full bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 border border-sky-500/30 font-medium py-2 px-4 rounded-xl transition-all flex items-center justify-center gap-2 text-xs"
+                >
+                  <ShoppingBag size={14} /> طلب كمية من المدير
+                </button>
+              </div>
             </div>
           );
         })}
       </div>
 
-      {selectedPkg && (
+      {/* Modal نافذة نجاح بيع الكرت وإظهار كوده */}
+      {soldCardResult && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-green-500/40 p-6 rounded-2xl w-full max-w-md shadow-2xl text-center dir-rtl">
+            <div className="w-14 h-14 bg-green-500/20 border border-green-500/30 rounded-full flex items-center justify-center mx-auto mb-4 text-green-400">
+              <Check size={28} />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-1">تم بيع الكرت بنجاح!</h3>
+            <p className="text-sm text-gray-400 mb-4">{soldCardResult.packageName}</p>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6">
+              <p className="text-gray-400 text-xs mb-1">كود الكرت للزبون:</p>
+              <p className="text-2xl font-mono font-bold text-green-400 tracking-wider" dir="ltr">{soldCardResult.code}</p>
+            </div>
+
+            <button
+              onClick={() => setSoldCardResult(null)}
+              className="w-full bg-green-600 hover:bg-green-500 text-white font-medium py-2.5 rounded-xl transition-all"
+            >
+              تم، إغلاق النافذة
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal طلب كمية كروت جديدة */}
+      {selectedPkgForRequest && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-full max-w-md shadow-2xl dir-rtl">
-            <h3 className="text-xl font-bold text-white mb-1">طلب كروت: {selectedPkg.name}</h3>
-            <p className="text-sm text-gray-400 mb-5">سعر الكارت الواحد: {selectedPkg.value} ريال</p>
+            <h3 className="text-xl font-bold text-white mb-1">طلب كروت: {selectedPkgForRequest.name}</h3>
+            <p className="text-sm text-gray-400 mb-5">سعر الكارت الواحد: {selectedPkgForRequest.value} ريال</p>
 
             <form onSubmit={handleSendRequest} className="space-y-4">
               <div>
@@ -214,11 +277,11 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
               <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 space-y-2 text-sm">
                 <div className="flex justify-between text-gray-300">
                   <span>المبلغ الإجمالي:</span>
-                  <span className="font-bold text-sky-400 text-base">{quantity * selectedPkg.value} ريال</span>
+                  <span className="font-bold text-sky-400 text-base">{quantity * selectedPkgForRequest.value} ريال</span>
                 </div>
                 <div className="flex justify-between text-gray-400 text-xs pt-2 border-t border-slate-800">
                   <span>رصيدك الحالي:</span>
-                  <span className={currentUser.balance >= quantity * selectedPkg.value ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
+                  <span className={currentUser.balance >= quantity * selectedPkgForRequest.value ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
                     {currentUser.balance} ريال
                   </span>
                 </div>
@@ -228,7 +291,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
                 <button type="submit" className="flex-1 bg-green-600 hover:bg-green-500 text-white font-medium py-2.5 rounded-xl transition-all shadow-lg">
                   إرسال الطلب للمدير
                 </button>
-                <button type="button" onClick={() => setSelectedPkg(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-gray-300 font-medium py-2.5 rounded-xl transition-all">
+                <button type="button" onClick={() => setSelectedPkgForRequest(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-gray-300 font-medium py-2.5 rounded-xl transition-all">
                   إلغاء
                 </button>
               </div>
@@ -241,7 +304,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Admin Dashboard
+// Admin Dashboard (كما هي السابقة مع إدارة الطلبات)
 // ─────────────────────────────────────────────────────────────────────────────
 const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
   if (user.role !== 'admin') return <ResellerDashboard user={user} onNavigate={onNavigate} />;
@@ -320,7 +383,6 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         </button>
       </div>
 
-      {/* Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard icon={Package} label="إجمالي الباقات" value={stats.totalPackages} sub="باقة نشطة" color="sky" />
         <MetricCard icon={CreditCard} label="إجمالي البطاقات" value={stats.totalLoans} sub={`${stats.availableLoans} متاح`} color="green" />
@@ -328,7 +390,6 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         <MetricCard icon={TrendingUp} label="إجمالي القيمة" value={formatCurrency(stats.totalValueRiyal)} sub="بالريال اليمني" color="sky" />
       </div>
 
-      {/* ── قسم طلبات الكروت المعلقة من الموزعين (الإشعارات) ── */}
       <div className="card-bg rounded-2xl p-6 border border-amber-500/30 bg-slate-900/90 shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
@@ -373,16 +434,10 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
                     <td className="py-3 text-gray-500 text-xs">{formatDate(req.createdAt)}</td>
                     <td className="py-3 text-center">
                       <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => handleApprove(req.id)}
-                          className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium flex items-center gap-1 shadow transition-all"
-                        >
+                        <button onClick={() => handleApprove(req.id)} className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium flex items-center gap-1 shadow transition-all">
                           <Check size={14} /> موافقة وخصم الرصيد
                         </button>
-                        <button
-                          onClick={() => handleReject(req.id)}
-                          className="px-3 py-1.5 rounded-lg bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white text-xs font-medium flex items-center gap-1 transition-all border border-red-500/30"
-                        >
+                        <button onClick={() => handleReject(req.id)} className="px-3 py-1.5 rounded-lg bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white text-xs font-medium flex items-center gap-1 transition-all border border-red-500/30">
                           <X size={14} /> رفض
                         </button>
                       </div>
@@ -393,13 +448,10 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
             </table>
           </div>
         ) : (
-          <div className="py-8 text-center text-gray-500 text-sm">
-            لا توجد طلبات كروت معلقة حالياً من الموزعين.
-          </div>
+          <div className="py-8 text-center text-gray-500 text-sm">لا توجد طلبات كروت معلقة حالياً من الموزعين.</div>
         )}
       </div>
 
-      {/* Central Customization Widget */}
       <div className="card-bg rounded-2xl p-6 border border-sky-500/20 bg-slate-900/80">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-500/30 flex items-center justify-center">
@@ -431,7 +483,6 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         </div>
       </div>
 
-      {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-slate-900/80 rounded-xl p-5 border border-slate-800">
           <div className="flex items-center gap-2 mb-4">
@@ -485,7 +536,6 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         </div>
       </div>
 
-      {/* Recent cards */}
       <div className="bg-slate-900/80 rounded-xl p-5 border border-slate-800">
         <h3 className="text-white font-semibold text-sm mb-4">آخر البطاقات المضافة</h3>
         {recentLoans.length > 0 ? (
@@ -523,8 +573,8 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
           </div>
         ) : (
           <div className="py-12 text-center text-gray-500">
-            <CreditCard size={32} className="mx-auto mb-3 opacity-30" />
-            <p className="text-sm">لا توجد بطاقات بعد — أضف بطاقات من صفحة البطاقات</p>
+            <CreditCard size5={32} className="mx-auto mb-3 opacity-30" />
+            <p className="text-sm">لا توجد بطاقات بعد</p>
           </div>
         )}
       </div>
