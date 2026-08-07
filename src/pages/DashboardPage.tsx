@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react';
 import {
   Package, CreditCard, Users, TrendingUp, Activity,
-  Zap, Globe, RefreshCw, BarChart3, ShoppingBag, Wallet, CheckCircle2, AlertCircle
+  Zap, Globe, RefreshCw, BarChart3, ShoppingBag, Wallet, CheckCircle2, AlertCircle, Check, X
 } from 'lucide-react';
-import { getPackages, getLoans, getUsers, createCardRequest } from '@/lib/storage';
+import { getPackages, getLoans, getUsers, createCardRequest, getCardRequests, approveCardRequest, rejectCardRequest } from '@/lib/storage';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import type { User, Package as PackageType } from '@/types';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
+import { toast } from 'sonner';
 
 interface DashboardPageProps {
   user: User;
@@ -62,7 +63,6 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
   const [quantity, setQuantity] = useState<number>(1);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // تحديث بيانات الموزع الحالية ورصيده
   const currentUser = useMemo(() => {
     const users = getUsers();
     return users.find((u) => u.id === user.id) || user;
@@ -71,7 +71,6 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
   const { packages, assignedLoansCount } = useMemo(() => {
     const pkgs = getPackages();
     const loans = getLoans();
-    // الكروت المخصصة للموزع الحالية
     const myLoans = loans.filter((l) => l.assignedTo === currentUser.id && l.status !== 'sold');
     return {
       packages: pkgs,
@@ -85,7 +84,6 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
 
     const totalPrice = quantity * selectedPkg.value;
 
-    // فحص الرصيد المتاح عند الموزع
     if (currentUser.balance < totalPrice) {
       setStatusMsg({
         type: 'error',
@@ -94,8 +92,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
       return;
     }
 
-    // إرسال الطلب للمدير
-    createCardRequest(
+    const res = createCardRequest(
       currentUser.id,
       currentUser.name,
       selectedPkg.id,
@@ -104,10 +101,13 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
       selectedPkg.value
     );
 
-    setStatusMsg({
-      type: 'success',
-      text: `تم إرسال طلب ${quantity} كارت من (${selectedPkg.name}) بنجاح إلى إدارة الشبكة!`,
-    });
+    if (res.success) {
+      toast.success(res.message);
+      setStatusMsg({ type: 'success', text: res.message });
+    } else {
+      toast.error(res.message);
+      setStatusMsg({ type: 'error', text: res.message });
+    }
 
     setSelectedPkg(null);
     setQuantity(1);
@@ -116,7 +116,6 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
 
   return (
     <div className="space-y-6" dir="rtl">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">لوحة الموزعين</h1>
@@ -130,7 +129,6 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
         </button>
       </div>
 
-      {/* Alert Messages */}
       {statusMsg && (
         <div
           className={`p-4 rounded-xl border flex items-center gap-3 text-sm ${
@@ -144,32 +142,12 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
         </div>
       )}
 
-      {/* Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard
-          icon={Wallet}
-          label="رصيدك الحالي"
-          value={formatCurrency(currentUser.balance || 0)}
-          sub="متوفر للشراء والطلب"
-          color="green"
-        />
-        <MetricCard
-          icon={CreditCard}
-          label="الكروت المخصصة لك"
-          value={assignedLoansCount}
-          sub="جاهزة للبيع للزبائن"
-          color="sky"
-        />
-        <MetricCard
-          icon={Package}
-          label="الباقات المتاحة"
-          value={packages.length}
-          sub="فئات جاهزة للطلب"
-          color="purple"
-        />
+        <MetricCard icon={Wallet} label="رصيدك الحالي" value={formatCurrency(currentUser.balance || 0)} sub="متوفر للشراء والطلب" color="green" />
+        <MetricCard icon={CreditCard} label="الكروت المخصصة لك" value={assignedLoansCount} sub="جاهزة للبيع للزبائن" color="sky" />
+        <MetricCard icon={Package} label="الباقات المتاحة" value={packages.length} sub="فئات جاهزة للطلب" color="purple" />
       </div>
 
-      {/* Package Request Grid */}
       <h2 className="text-lg font-bold text-white mt-8 mb-4 flex items-center gap-2">
         <ShoppingBag size={20} className="text-sky-400" />
         طلب كروت جديدة من رصيدك
@@ -180,10 +158,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
           const availableInNetwork = getLoans().filter((l) => l.packageId === pkg.id && l.status !== 'sold' && !l.assignedTo).length;
 
           return (
-            <div
-              key={pkg.id}
-              className="bg-slate-900/80 rounded-xl p-5 border border-slate-800 hover:border-sky-500/40 transition-all flex flex-col justify-between"
-            >
+            <div key={pkg.id} className="bg-slate-900/80 rounded-xl p-5 border border-slate-800 hover:border-sky-500/40 transition-all flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center">
@@ -198,7 +173,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
                 <div className="my-4 bg-slate-950/60 p-3 rounded-lg border border-slate-800/80 flex items-center justify-between">
                   <span className="text-sky-400 font-bold text-xl">{pkg.value} ريال</span>
                   <span className={`text-xs px-2 py-0.5 rounded ${availableInNetwork > 0 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
-                    {availableInNetwork > 0 ? `متوفر بالمخزون: ${availableInNetwork}` : 'طلب على الانتظار'}
+                    {availableInNetwork > 0 ? `متاح: ${availableInNetwork}` : 'غير متوفر'}
                   </span>
                 </div>
               </div>
@@ -210,15 +185,13 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
                 }}
                 className="w-full mt-2 bg-sky-600 hover:bg-sky-500 text-white font-medium py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-lg shadow-sky-600/20"
               >
-                <ShoppingBag size={16} />
-                طلب كمية من الباقة
+                <ShoppingBag size={16} /> طلب كمية
               </button>
             </div>
           );
         })}
       </div>
 
-      {/* Request Modal */}
       {selectedPkg && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-full max-w-md shadow-2xl dir-rtl">
@@ -227,7 +200,7 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
 
             <form onSubmit={handleSendRequest} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">الكمية المطلوبة (عدد الكروت):</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1.5">الكمية المطلوبة:</label>
                 <input
                   type="number"
                   min="1"
@@ -240,11 +213,11 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
 
               <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 space-y-2 text-sm">
                 <div className="flex justify-between text-gray-300">
-                  <span>المبلغ الإجمالي المطلوب:</span>
+                  <span>المبلغ الإجمالي:</span>
                   <span className="font-bold text-sky-400 text-base">{quantity * selectedPkg.value} ريال</span>
                 </div>
                 <div className="flex justify-between text-gray-400 text-xs pt-2 border-t border-slate-800">
-                  <span>رصيدك الحالي المتاح:</span>
+                  <span>رصيدك الحالي:</span>
                   <span className={currentUser.balance >= quantity * selectedPkg.value ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
                     {currentUser.balance} ريال
                   </span>
@@ -252,17 +225,10 @@ const ResellerDashboard = ({ user }: DashboardPageProps) => {
               </div>
 
               <div className="flex gap-3 pt-3">
-                <button
-                  type="submit"
-                  className="flex-1 bg-green-600 hover:bg-green-500 text-white font-medium py-2.5 rounded-xl transition-all shadow-lg shadow-green-600/20"
-                >
+                <button type="submit" className="flex-1 bg-green-600 hover:bg-green-500 text-white font-medium py-2.5 rounded-xl transition-all shadow-lg">
                   إرسال الطلب للمدير
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedPkg(null)}
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-gray-300 font-medium py-2.5 rounded-xl transition-all"
-                >
+                <button type="button" onClick={() => setSelectedPkg(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-gray-300 font-medium py-2.5 rounded-xl transition-all">
                   إلغاء
                 </button>
               </div>
@@ -282,15 +248,15 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
 
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const { stats, packageChartData, recentLoans, pieData } = useMemo(() => {
+  const { stats, packageChartData, recentLoans, pieData, pendingRequests } = useMemo(() => {
     const packages = getPackages();
     const loans = getLoans();
     const users = getUsers();
     const resellers = users.filter((u) => u.role === 'reseller');
+    const requests = getCardRequests();
 
     const available = loans.filter((l) => l.status === 'available' || !l.status).length;
     const used = loans.filter((l) => l.status === 'sold').length;
-
     const totalValueRiyal = packages.reduce((acc, pkg) => acc + pkg.value * pkg.loanCount, 0);
 
     const packageChartData = packages.map((pkg) => ({
@@ -300,6 +266,7 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
     }));
 
     const recentLoans = [...loans].sort((a, b) => b.addedAt.localeCompare(a.addedAt)).slice(0, 6);
+    const pendingRequests = requests.filter((r) => r.status === 'pending');
 
     const pieData = [
       { name: 'متاحة', value: available, color: '#22c55e' },
@@ -318,12 +285,28 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
       packageChartData,
       recentLoans,
       pieData,
+      pendingRequests,
     };
   }, [refreshKey]);
 
+  const handleApprove = (reqId: string) => {
+    const res = approveCardRequest(reqId);
+    if (res.success) {
+      toast.success(res.message);
+    } else {
+      toast.error(res.message);
+    }
+    setRefreshKey((k) => k + 1);
+  };
+
+  const handleReject = (reqId: string) => {
+    rejectCardRequest(reqId);
+    toast.info('تم رفض الطلب');
+    setRefreshKey((k) => k + 1);
+  };
+
   return (
     <div className="space-y-6" dir="rtl">
-      {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">لوحة التحكم الإدارية</h1>
@@ -333,8 +316,7 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
           onClick={() => setRefreshKey((k) => k + 1)}
           className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-700 hover:bg-white/5 text-gray-300 hover:text-white transition-all text-sm"
         >
-          <RefreshCw size={14} />
-          تحديث
+          <RefreshCw size={14} /> تحديث
         </button>
       </div>
 
@@ -343,13 +325,78 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         <MetricCard icon={Package} label="إجمالي الباقات" value={stats.totalPackages} sub="باقة نشطة" color="sky" />
         <MetricCard icon={CreditCard} label="إجمالي البطاقات" value={stats.totalLoans} sub={`${stats.availableLoans} متاح`} color="green" />
         <MetricCard icon={Users} label="الموزعون" value={stats.totalResellers} sub="موزع نشط" color="orange" />
-        <MetricCard
-          icon={TrendingUp}
-          label="إجمالي القيمة"
-          value={formatCurrency(stats.totalValueRiyal)}
-          sub="بالريال اليمني"
-          color="sky"
-        />
+        <MetricCard icon={TrendingUp} label="إجمالي القيمة" value={formatCurrency(stats.totalValueRiyal)} sub="بالريال اليمني" color="sky" />
+      </div>
+
+      {/* ── قسم طلبات الكروت المعلقة من الموزعين (الإشعارات) ── */}
+      <div className="card-bg rounded-2xl p-6 border border-amber-500/30 bg-slate-900/90 shadow-xl">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center relative">
+              <ShoppingBag size={18} className="text-amber-400" />
+              {pendingRequests.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center font-bold">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </div>
+            <div>
+              <h2 className="text-white font-bold text-base">طلبات الكروت المعلقة من الموزعين</h2>
+              <p className="text-gray-400 text-xs">طلبات شراء بحاجة لموافقتك وتخصيص الكروت</p>
+            </div>
+          </div>
+          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            {pendingRequests.length} طلب بانتظار الاعتماد
+          </span>
+        </div>
+
+        {pendingRequests.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead>
+                <tr className="text-gray-400 border-b border-slate-800 text-xs">
+                  <th className="pb-3 font-medium">الموزع</th>
+                  <th className="pb-3 font-medium">الباقة المطلوبة</th>
+                  <th className="pb-3 font-medium">الكمية</th>
+                  <th className="pb-3 font-medium">الإجمالي</th>
+                  <th className="pb-3 font-medium">التاريخ</th>
+                  <th className="pb-3 font-medium text-center">الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {pendingRequests.map((req) => (
+                  <tr key={req.id} className="text-gray-200">
+                    <td className="py-3 font-bold text-sky-400">{req.resellerName}</td>
+                    <td className="py-3">{req.packageName}</td>
+                    <td className="py-3"><span className="px-2 py-0.5 rounded bg-slate-800 text-white font-bold">{req.quantity}</span> كروت</td>
+                    <td className="py-3 text-green-400 font-bold">{req.totalPrice} ريال</td>
+                    <td className="py-3 text-gray-500 text-xs">{formatDate(req.createdAt)}</td>
+                    <td className="py-3 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => handleApprove(req.id)}
+                          className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium flex items-center gap-1 shadow transition-all"
+                        >
+                          <Check size={14} /> موافقة وخصم الرصيد
+                        </button>
+                        <button
+                          onClick={() => handleReject(req.id)}
+                          className="px-3 py-1.5 rounded-lg bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white text-xs font-medium flex items-center gap-1 transition-all border border-red-500/30"
+                        >
+                          <X size={14} /> رفض
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="py-8 text-center text-gray-500 text-sm">
+            لا توجد طلبات كروت معلقة حالياً من الموزعين.
+          </div>
+        )}
       </div>
 
       {/* Central Customization Widget */}
@@ -365,59 +412,27 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <button
-            onClick={() => onNavigate('packages')}
-            className="flex flex-col items-center gap-2 p-4 rounded-xl bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/15 transition-all group"
-          >
+          <button onClick={() => onNavigate('packages')} className="flex flex-col items-center gap-2 p-4 rounded-xl bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/15 transition-all group">
             <Package size={20} className="text-sky-400 group-hover:scale-110 transition-transform" />
             <span className="text-white text-sm font-medium">إضافة باقة</span>
           </button>
-
-          <button
-            onClick={() => onNavigate('loans')}
-            className="flex flex-col items-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20 hover:bg-green-500/15 transition-all group"
-          >
+          <button onClick={() => onNavigate('loans')} className="flex flex-col items-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20 hover:bg-green-500/15 transition-all group">
             <CreditCard size={20} className="text-green-400 group-hover:scale-110 transition-transform" />
             <span className="text-white text-sm font-medium">إضافة قروض</span>
           </button>
-
-          <button
-            onClick={() => onNavigate('resellers')}
-            className="flex flex-col items-center gap-2 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20 hover:bg-orange-500/15 transition-all group"
-          >
+          <button onClick={() => onNavigate('resellers')} className="flex flex-col items-center gap-2 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20 hover:bg-orange-500/15 transition-all group">
             <Users size={20} className="text-orange-400 group-hover:scale-110 transition-transform" />
             <span className="text-white text-sm font-medium">إدارة الموزعين</span>
           </button>
-
-          <button
-            onClick={() => onNavigate('mikrotik')}
-            className="flex flex-col items-center gap-2 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/15 transition-all group"
-          >
+          <button onClick={() => onNavigate('mikrotik')} className="flex flex-col items-center gap-2 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/15 transition-all group">
             <Globe size={20} className="text-purple-400 group-hover:scale-110 transition-transform" />
             <span className="text-white text-sm font-medium">MikroTik</span>
           </button>
-        </div>
-
-        {/* Status bar */}
-        <div className="mt-4 flex items-center gap-4 pt-4 border-t border-slate-800">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-            <span className="text-gray-400 text-xs">النظام يعمل بكفاءة</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Activity size={12} className="text-sky-400" />
-            <span className="text-gray-400 text-xs">آخر تحديث: الآن</span>
-          </div>
-          <div className="flex items-center gap-2 mr-auto">
-            <span className="text-gray-500 text-xs">قروض متاحة:</span>
-            <span className="text-green-400 font-bold text-sm">{stats.availableLoans}</span>
-          </div>
         </div>
       </div>
 
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Bar chart */}
         <div className="lg:col-span-2 bg-slate-900/80 rounded-xl p-5 border border-slate-800">
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 size={16} className="text-sky-400" />
@@ -429,20 +444,15 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                 <XAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} />
                 <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#fff' }}
-                />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#fff' }} />
                 <Bar dataKey="قروض" fill="#0284c7" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-48 flex items-center justify-center text-gray-500 text-sm">
-              لا توجد بيانات بعد
-            </div>
+            <div className="h-48 flex items-center justify-center text-gray-500 text-sm">لا توجد بيانات بعد</div>
           )}
         </div>
 
-        {/* Pie chart */}
         <div className="bg-slate-900/80 rounded-xl p-5 border border-slate-800">
           <h3 className="text-white font-semibold text-sm mb-4">حالة القروض</h3>
           {stats.totalLoans > 0 ? (
@@ -454,9 +464,7 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
                       <Cell key={idx} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#fff' }}
-                  />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#fff' }} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="space-y-2 mt-2">
@@ -472,9 +480,7 @@ const DashboardPage = ({ user, onNavigate }: DashboardPageProps) => {
               </div>
             </>
           ) : (
-            <div className="h-48 flex items-center justify-center text-gray-500 text-sm">
-              لا توجد قروض
-            </div>
+            <div className="h-48 flex items-center justify-center text-gray-500 text-sm">لا توجد قروض</div>
           )}
         </div>
       </div>
