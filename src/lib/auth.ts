@@ -1,5 +1,5 @@
 import { STORAGE_KEYS, ADMIN_EMAIL, ADMIN_PASSWORD } from '@/constants';
-import { getUsers, createUser } from '@/lib/storage';
+import { getUsers, createUser, getPasswords } from '@/lib/storage';
 import type { User, AuthState } from '@/types';
 
 export const getAuth = (): AuthState => {
@@ -16,10 +16,13 @@ export const setAuth = (state: AuthState) => {
 };
 
 export const login = (email: string, password: string): { success: boolean; user?: User; error?: string } => {
-  // Admin login
-  if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = password.trim();
+
+  // 1. فحص دخول المدير
+  if (cleanEmail === ADMIN_EMAIL.toLowerCase() && cleanPass === ADMIN_PASSWORD) {
     const users = getUsers();
-    const admin = users.find((u) => u.email === ADMIN_EMAIL);
+    const admin = users.find((u) => u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
     if (admin) {
       const state: AuthState = { isAuthenticated: true, user: admin };
       setAuth(state);
@@ -27,14 +30,24 @@ export const login = (email: string, password: string): { success: boolean; user
     }
   }
 
-  // Reseller login
+  // 2. البحث عن المستخدم في النظام
   const users = getUsers();
-  const user = users.find((u) => u.email === email);
+  const passwords = getPasswords();
+  
+  const user = users.find((u) => u.email.toLowerCase() === cleanEmail);
   if (!user) return { success: false, error: 'البريد الإلكتروني غير موجود' };
-  if (user.status === 'suspended') return { success: false, error: 'الحساب موقوف. تواصل مع الإدارة.' };
 
-  // Mock: password is always "pass123" for resellers in demo
-  if (password !== 'pass123' && !(email === ADMIN_EMAIL && password === ADMIN_PASSWORD)) {
+  // 3. التحقق من حالة الحساب
+  if (user.status === 'suspended') {
+    return { success: false, error: 'الحساب موقوف. تواصل مع الإدارة.' };
+  }
+  if (user.status === 'pending') {
+    return { success: false, error: 'حسابك قيد المراجعة وبانتظار موافقة المدير.' };
+  }
+
+  // 4. التحقق من كلمة المرور الحقيقية المحفوظة للموزع
+  const savedPass = passwords[user.id];
+  if (!savedPass || savedPass.trim() !== cleanPass) {
     return { success: false, error: 'كلمة المرور غير صحيحة' };
   }
 
@@ -48,14 +61,27 @@ export const register = (
   email: string,
   password: string
 ): { success: boolean; user?: User; error?: string } => {
+  const cleanEmail = email.trim().toLowerCase();
   const users = getUsers();
-  if (users.find((u) => u.email === email)) {
+  
+  if (users.find((u) => u.email.toLowerCase() === cleanEmail)) {
     return { success: false, error: 'البريد الإلكتروني مسجل مسبقاً' };
   }
-  const newUser = createUser({ name, email, role: 'reseller', status: 'active', balance: 0 });
-  const state: AuthState = { isAuthenticated: true, user: newUser };
-  setAuth(state);
-  return { success: true, user: newUser };
+
+  // إنشاء مستخدم جديد بحالة 'pending' (بانتظار موافقة المدير) وتمرير كلمة المرور لحفظها
+  const newUser = createUser({
+    name: name.trim(),
+    email: cleanEmail,
+    role: 'reseller',
+    status: 'pending',
+    balance: 0
+  }, password);
+
+  return { 
+    success: true, 
+    user: newUser, 
+    error: 'تم تسجيل الحساب بنجاح، يانتظار موافقة المدير لتسجيل الدخول.' 
+  };
 };
 
 export const logout = () => {
