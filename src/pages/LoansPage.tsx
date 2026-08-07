@@ -31,14 +31,15 @@ const loadPdfjs = async () => {
   }
 };
 
-// Phone number pattern filter
-const PHONE_RE = /^[\d\s\+\-\(\)]{7,15}$/;
+// 🟢 فلتر أرقام الهواتف (استبعاد الأرقام الهاتفيّة الصريحة التي تتكون من 9 أرقام فأكثر وتبدأ بـ 07 أو 7)
+const PHONE_RE = /^(?:0?7[0-9]{8}|7[0-9]{8})$/;
 
+// 🟢 دالة استخراج الأكواد المقبولة من 4 خانات وفوق إلى 80 خانة
 const extractCodesFromText = (text: string): string[] => {
   return text
     .split(/[\n\r]+/)
     .map((l) => l.trim())
-    .filter((l) => l.length >= 4 && l.length <= 80)
+    .filter((l) => l.length >= 4 && l.length <= 80) // 👈 تم الضبط من 4 خانات وفوق
     .filter((l) => !PHONE_RE.test(l.replace(/\s/g, '')));
 };
 
@@ -474,6 +475,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
   const handleManualAdd = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualCode.trim()) { toast.error('يرجى إدخال كود البطاقة'); return; }
+    if (manualCode.trim().length < 4) { toast.error('كود البطاقة يجب أن يتكون من 4 خانات على الأقل'); return; }
     if (!manualPkgId) { toast.error('يرجى اختيار الباقة'); return; }
     setManualLoading(true);
     const pkg = packages.find((p) => p.id === manualPkgId);
@@ -489,7 +491,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
   // ── تحسين الاستيراد المجمع للتعامل مع المئات والآلاف دفعة واحدة ─────────
   const handleBulkPreview = () => {
     const codes = extractCodesFromText(bulkText);
-    if (codes.length === 0) { toast.error('لا توجد أكواد صالحة في النص'); return; }
+    if (codes.length === 0) { toast.error('لا توجد أكواد صالحة في النص (يجب أن تكون الأكواد من 4 خانات فما فوق)'); return; }
     setBulkPreview(codes);
     setShowBulkPreview(true);
   };
@@ -532,7 +534,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
         createLoans(dataList);
         importedCount += chunk.length;
         
-        // متابعة الدفعة التالية بعد جزء من الثانية لمنع تجميد واجهة المستخدم
         setTimeout(processChunks, 10);
       } catch (err) {
         console.error('Bulk import chunk error:', err);
@@ -578,7 +579,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
         }
       }
 
-      if (!fullText || fullText.trim().length < 5) {
+      if (!fullText || fullText.trim().length < 4) {
         try {
           fullText = await file.text();
         } catch (textErr) {
@@ -609,7 +610,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
     if (selectedCodes.length === 0) { toast.error('يرجى تحديد أكواد للاستيراد'); return; }
     const pkg = packages.find((p) => p.id === pdfPkgId);
     
-    // استخدام معالجة الدفعات أيضاً للاستيراد من الـ PDF لضمان دعم الآلاف
     setPdfLoading(true);
     let importedCount = 0;
     const CHUNK_SIZE = 1000;
@@ -798,7 +798,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
             </div>
             <div>
               <label className="block text-gray-400 text-sm mb-1.5">كود البطاقة *</label>
-              <input value={manualCode} onChange={(e) => setManualCode(e.target.value)} placeholder="أدخل كود البطاقة هنا" className="input-field" dir="ltr" />
+              <input value={manualCode} onChange={(e) => setManualCode(e.target.value)} placeholder="أدخل كود البطاقة هنا (4 خانات فما فوق)" className="input-field" dir="ltr" />
             </div>
             <button type="submit" disabled={manualLoading} className="btn-primary w-full flex items-center justify-center gap-2">
               {manualLoading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Plus size={16} />}
@@ -830,13 +830,13 @@ const LoansPage = ({ user }: LoansPageProps) => {
                 <textarea
                   value={bulkText}
                   onChange={(e) => { setBulkText(e.target.value); setShowBulkPreview(false); setBulkPreview([]); }}
-                  placeholder={"CODE-001\nCODE-002\nCODE-003\n..."}
+                  placeholder={"382738\n4509382\nCODE-003\n..."}
                   rows={10}
                   className="input-field font-mono text-sm resize-y"
                   dir="ltr"
                 />
-                <p className="text-gray-600 text-xs mt-1">
-                  أرقام الهاتف تُستبعد تلقائياً — يُقبل كل سطر يحتوي على 4–80 حرف
+                <p className="text-gray-500 text-xs mt-1">
+                  🟢 أرقام الهاتف تُستبعد تلقائياً — يُقبل كل سطر يحتوي على 4–80 حرف
                 </p>
               </div>
 
@@ -899,7 +899,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
             <div onClick={() => fileRef.current?.click()} className="border-2 border-dashed border-border hover:border-sky-500/50 rounded-xl p-10 text-center cursor-pointer transition-all hover:bg-sky-500/5">
               <Upload size={32} className="mx-auto mb-3 text-gray-600" />
               <p className="text-white font-medium mb-1">{pdfFileName || 'اسحب ملف PDF أو TXT هنا أو انقر للرفع'}</p>
-              <p className="text-gray-500 text-xs">سيتم استخراج الأكواد تلقائياً وتصفية أرقام الهاتف</p>
+              <p className="text-gray-500 text-xs">سيتم استخراج الأكواد تلقائياً (من 4 خانات فما فوق)</p>
               <input ref={fileRef} type="file" accept=".pdf,.txt,text/plain,application/pdf" onChange={handleFileUpload} className="hidden" />
             </div>
             {pdfLoading && (
