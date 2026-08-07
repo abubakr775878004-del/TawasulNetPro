@@ -48,7 +48,7 @@ interface LoansPageProps {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Reseller-only view: shows available packages + card counts — NO raw codes
+// Reseller-only view: shows available packages + card counts — NO raw codes table
 // ────────────────────────────────────────────────────────────────────────────
 const ResellerView = ({ user }: { user: User }) => {
   const [packages] = useState(() => getPackages());
@@ -222,71 +222,6 @@ const ResellerView = ({ user }: { user: User }) => {
         </div>
       )}
 
-      <div className="card-bg rounded-xl overflow-hidden">
-        <div className="p-4 border-b border-border flex items-center gap-3">
-          <Eye size={16} className="text-sky-400" />
-          <h3 className="text-white font-semibold text-sm">البطاقات المتاحة — انقر "بيع" لتسجيل البيع</h3>
-        </div>
-        {loans.filter((l) => l.status === 'available').length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>الباقة</th>
-                  <th>السعر</th>
-                  <th>الإجراء</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loans
-                  .filter((l) => l.status === 'available')
-                  .map((loan, idx) => (
-                    <tr key={loan.id}>
-                      <td className="text-gray-600 text-xs">{idx + 1}</td>
-                      <td className="text-gray-300 text-sm">{loan.packageName}</td>
-                      <td className="text-sky-400 font-medium text-sm">
-                        {packages.find((p) => p.id === loan.packageId)?.value ?? '—'} ريال
-                      </td>
-                      <td>
-                        {soldConfirm === loan.id ? (
-                          <div className="flex gap-1.5 items-center">
-                            <span className="text-orange-300 text-xs">تأكيد البيع؟</span>
-                            <button
-                              onClick={() => handleMarkSold(loan.id)}
-                              className="px-2 py-1 rounded bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 text-xs flex items-center gap-1"
-                            >
-                              <Check size={11} /> نعم
-                            </button>
-                            <button
-                              onClick={() => setSoldConfirm(null)}
-                              className="px-2 py-1 rounded border border-border text-gray-400 text-xs"
-                            >
-                              إلغاء
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setSoldConfirm(loan.id)}
-                            className="px-3 py-1.5 rounded-lg bg-orange-500/15 border border-orange-500/25 text-orange-400 hover:bg-orange-500/25 text-xs flex items-center gap-1 transition-colors"
-                          >
-                            <ShoppingCart size={12} /> بيع
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="py-14 text-center">
-            <CreditCard size={40} className="mx-auto mb-3 text-gray-700" />
-            <p className="text-gray-500 text-sm">لا توجد بطاقات متاحة حالياً</p>
-          </div>
-        )}
-      </div>
-
       {requests.length > 0 && (
         <div className="card-bg rounded-xl overflow-hidden mt-6">
           <div className="p-4 border-b border-border">
@@ -423,7 +358,7 @@ const ResellerView = ({ user }: { user: User }) => {
 };
 
 // ────────────────────────────────────────────────────────────────────────────
-// Main component
+// Main component for Manager (Admin)
 // ────────────────────────────────────────────────────────────────────────────
 const LoansPage = ({ user }: LoansPageProps) => {
   const isManager = user.role === 'admin';
@@ -488,7 +423,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
     }, 200);
   };
 
-  // ── تحسين الاستيراد المجمع للتعامل مع المئات والآلاف دفعة واحدة ─────────
   const handleBulkPreview = () => {
     const codes = extractCodesFromText(bulkText);
     if (codes.length === 0) { toast.error('لا توجد أكواد صالحة في النص (يجب أن تكون الأكواد من 4 خانات فما فوق)'); return; }
@@ -502,14 +436,11 @@ const LoansPage = ({ user }: LoansPageProps) => {
     setBulkLoading(true);
     
     const pkg = packages.find((p) => p.id === bulkPkgId);
-    
-    // تقسيم الحزم إلى دفعات (Chunks) لضمان عدم تعليق المتصفح عند إدخال الآلاف
-    const CHUNK_SIZE = 1000;
     let importedCount = 0;
 
     const processChunks = () => {
       try {
-        const chunk = bulkPreview.slice(importedCount, importedCount + CHUNK_SIZE);
+        const chunk = bulkPreview.slice(importedCount, importedCount + 1000);
         if (chunk.length === 0) {
           toast.success(`تم استيراد ${bulkPreview.length} بطاقة بنجاح إلى ${pkg?.name}`);
           setBulkText('');
@@ -533,7 +464,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
 
         createLoans(dataList);
         importedCount += chunk.length;
-        
         setTimeout(processChunks, 10);
       } catch (err) {
         console.error('Bulk import chunk error:', err);
@@ -545,7 +475,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
     processChunks();
   };
 
-  // ── PDF parsing using spatial analysis (Coordinates & Layout) ─────────────
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -563,7 +492,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
         const lib = await loadPdfjs();
         if (lib) {
           const arrayBuffer = await file.arrayBuffer();
-          // ⭐ دعم cMapUrl لفك شفرات الخطوط والرموز العربي/المشفرة
           const pdf = await lib.getDocument({
             data: new Uint8Array(arrayBuffer),
             cMapUrl: `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version || '3.11.174'}/cmaps/`,
@@ -576,7 +504,6 @@ const LoansPage = ({ user }: LoansPageProps) => {
             const page = await pdf.getPage(i);
             const content = await page.getTextContent();
             
-            // 1. تحويل العناصر إلى مصفوفة مع الإحداثيات المكانية
             const items = content.items
               .filter((item): item is any => 'str' in item && typeof item.str === 'string')
               .map((item) => ({
@@ -586,32 +513,24 @@ const LoansPage = ({ user }: LoansPageProps) => {
               }))
               .filter((item) => item.text.length > 0);
 
-            // 2. ترتيب العناصر مكانياً (من الأعلى للأسفل، ومن اليسار لليمين)
             items.sort((a, b) => {
               const yDiff = b.y - a.y;
-              if (Math.abs(yDiff) > 6) return yDiff; // تفاوت السطر
+              if (Math.abs(yDiff) > 6) return yDiff;
               return a.x - b.x;
             });
 
-            // 3. فلترة البيانات واستخراج الأكواد بناءً على الشروط والموقع
             for (const item of items) {
               const cleanText = item.text.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '');
 
-              // فلاتر الاستبعاد الحازمة:
-              
-              // أ) استبعاد الأسعار والعملات
               if (/(?:ريال|ريـال|r?y|yer|sar|price|سعر)/i.test(cleanText)) continue;
               if (['100', '200', '300', '400', '500', '1000', '2000', '5000'].includes(cleanText)) continue;
 
-              // ب) استبعاد أرقام الهواتف بكافة صيغها (المحلية والدولية)
               const digitsOnly = cleanText.replace(/[^\d]/g, '');
               const isPhone = /^(?:0?7[0-9]{8}|7[0-9]{8}|9677[0-9]{8}|009677[0-9]{8})$/.test(digitsOnly);
               if (isPhone) continue;
 
-              // ج) استبعاد كلمات اسم الشبكة والنصوص العامة
               if (/(?:تواصل|شبكة|شبكه|انترنت|خدمات|wifi|net|mikrotik|card|بطاقة)/i.test(cleanText)) continue;
 
-              // د) شرط القبول: من 4 خانات وفوق، حروف إنجليزية أو أرقام فقط
               if (/^[A-Za-z0-9]{4,32}$/.test(cleanText)) {
                 const upperCode = cleanText.toUpperCase();
                 if (!seenCodes.has(upperCode)) {
@@ -624,14 +543,13 @@ const LoansPage = ({ user }: LoansPageProps) => {
         }
       }
 
-      // إذا لم يكن PDF أو كان ملف TXT عادي
       if (extracted.length === 0) {
         const textFallback = await file.text();
         extracted = extractCodesFromText(textFallback);
       }
 
       if (extracted.length === 0) {
-        toast.error('تعذر استخراج الأكواد من الملف. يُرجى التأكد من أن الملف يحتوي على أكواد صالحة.');
+        toast.error('تعذر استخراج الأكواد من الملف.');
       } else {
         setPdfLines(extracted);
         setSelectedPdfLines(new Set(extracted.map((_, i) => i)));
@@ -639,7 +557,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
       }
     } catch (err) {
       console.error('File parse spatial error:', err);
-      toast.error('فشل قراءة الملف، يُرجى المحاولة باستخدام (إضافة مجمع).');
+      toast.error('فشل قراءة الملف.');
     } finally {
       setPdfLoading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -654,11 +572,10 @@ const LoansPage = ({ user }: LoansPageProps) => {
     
     setPdfLoading(true);
     let importedCount = 0;
-    const CHUNK_SIZE = 1000;
 
     const processPdfChunks = () => {
       try {
-        const chunk = selectedCodes.slice(importedCount, importedCount + CHUNK_SIZE);
+        const chunk = selectedCodes.slice(importedCount, importedCount + 1000);
         if (chunk.length === 0) {
           toast.success(`تم استيراد ${selectedCodes.length} بطاقة بنجاح إلى ${pkg?.name}`);
           setPdfLines([]); 
