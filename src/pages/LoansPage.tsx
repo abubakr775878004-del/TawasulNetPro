@@ -31,15 +31,15 @@ const loadPdfjs = async () => {
   }
 };
 
-// 🟢 فلتر أرقام الهواتف (استبعاد الأرقام الهاتفيّة الصريحة التي تتكون من 9 أرقام فأكثر وتبدأ بـ 07 أو 7)
-const PHONE_RE = /^(?:0?7[0-9]{8}|7[0-9]{8})$/;
+// 🟢 فلتر أرقام الهواتف الشامل (استبعاد الهواتف المحلية والدولية)
+const PHONE_RE = /^(?:0?7[0-9]{8}|7[0-9]{8}|9677[0-9]{8}|009677[0-9]{8})$/;
 
-// 🟢 دالة استخراج الأكواد المقبولة من 4 خانات وفوق إلى 80 خانة
+// 🟢 دالة استخراج الأكواد المقبولة للنصوص العادية من 4 خانات وفوق
 const extractCodesFromText = (text: string): string[] => {
   return text
     .split(/[\n\r]+/)
     .map((l) => l.trim())
-    .filter((l) => l.length >= 4 && l.length <= 80) // 👈 تم الضبط من 4 خانات وفوق
+    .filter((l) => l.length >= 4 && l.length <= 80)
     .filter((l) => !PHONE_RE.test(l.replace(/\s/g, '')));
 };
 
@@ -545,7 +545,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
     processChunks();
   };
 
-  // ── PDF parsing with secure fallbacks ─────────────────────────────────────
+  // ── PDF parsing using spatial analysis (Coordinates & Layout) ─────────────
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -556,48 +556,90 @@ const LoansPage = ({ user }: LoansPageProps) => {
     setSelectedPdfLines(new Set());
 
     try {
-      let fullText = '';
+      let extracted: string[] = [];
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 
       if (isPdf) {
-        try {
-          const lib = await loadPdfjs();
-          if (lib) {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await lib.getDocument({ data: arrayBuffer }).promise;
-            const pageTexts: string[] = [];
-            for (let i = 1; i <= pdf.numPages; i++) {
-              const page = await pdf.getPage(i);
-              const content = await page.getTextContent();
-              const pageText = content.items.map((item) => ('str' in item ? item.str : '')).join('\n');
-              pageTexts.push(pageText);
+        const lib = await loadPdfjs();
+        if (lib) {
+          const arrayBuffer = await file.arrayBuffer();
+          // ⭐ دعم cMapUrl لفك شفرات الخطوط والرموز العربي/المشفرة
+          const pdf = await lib.getDocument({
+            data: new Uint8Array(arrayBuffer),
+            cMapUrl: `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version || '3.11.174'}/cmaps/`,
+            cMapPacked: true,
+          }).promise;
+
+          const seenCodes = new Set<string>();
+
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            
+            // 1. تحويل العناصر إلى مصفوفة مع الإحداثيات المكانية
+            const items = content.items
+              .filter((item): item is any => 'str' in item && typeof item.str === 'string')
+              .map((item) => ({
+                text: item.str.trim(),
+                x: Number(item.transform[4] ?? 0),
+                y: Number(item.transform[5] ?? 0),
+              }))
+              .filter((item) => item.text.length > 0);
+
+            // 2. ترتيب العناصر مكانياً (من الأعلى للأسفل، ومن اليسار لليمين)
+            items.sort((a, b) => {
+              const yDiff = b.y - a.y;
+              if (Math.abs(yDiff) > 6) return yDiff; // تفاوت السطر
+              return a.x - b.x;
+            });
+
+            // 3. فلترة البيانات واستخراج الأكواد بناءً على الشروط والموقع
+            for (const item of items) {
+              const cleanText = item.text.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '');
+
+              // فلاتر الاستبعاد الحازمة:
+              
+              // أ) استبعاد الأسعار والعملات
+              if (/(?:ريال|ريـال|r?y|yer|sar|price|سعر)/i.test(cleanText)) continue;
+              if (['100', '200', '300', '400', '500', '1000', '2000', '5000'].includes(cleanText)) continue;
+
+              // ب) استبعاد أرقام الهواتف بكافة صيغها (المحلية والدولية)
+              const digitsOnly = cleanText.replace(/[^\d]/g, '');
+              const isPhone = /^(?:0?7[0-9]{8}|7[0-9]{8}|9677[0-9]{8}|009677[0-9]{8})$/.test(digitsOnly);
+              if (isPhone) continue;
+
+              // ج) استبعاد كلمات اسم الشبكة والنصوص العامة
+              if (/(?:تواصل|شبكة|شبكه|انترنت|خدمات|wifi|net|mikrotik|card|بطاقة)/i.test(cleanText)) continue;
+
+              // د) شرط القبول: من 4 خانات وفوق، حروف إنجليزية أو أرقام فقط
+              if (/^[A-Za-z0-9]{4,32}$/.test(cleanText)) {
+                const upperCode = cleanText.toUpperCase();
+                if (!seenCodes.has(upperCode)) {
+                  seenCodes.add(upperCode);
+                  extracted.push(upperCode);
+                }
+              }
             }
-            fullText = pageTexts.join('\n');
           }
-        } catch (pdfErr) {
-          console.warn('PDF.js reader issue, falling back to direct text read:', pdfErr);
         }
       }
 
-      if (!fullText || fullText.trim().length < 4) {
-        try {
-          fullText = await file.text();
-        } catch (textErr) {
-          console.error('Direct text read failed:', textErr);
-        }
-      }
-
-      const extracted = extractCodesFromText(fullText);
+      // إذا لم يكن PDF أو كان ملف TXT عادي
       if (extracted.length === 0) {
-        toast.error('تعذر استخراج الأكواد من الملف. يُرجى استخدام خيار (إضافة مجمع) ولصق الأكواد مباشرة.');
+        const textFallback = await file.text();
+        extracted = extractCodesFromText(textFallback);
+      }
+
+      if (extracted.length === 0) {
+        toast.error('تعذر استخراج الأكواد من الملف. يُرجى التأكد من أن الملف يحتوي على أكواد صالحة.');
       } else {
         setPdfLines(extracted);
         setSelectedPdfLines(new Set(extracted.map((_, i) => i)));
-        toast.success(`تم استخراج ${extracted.length} كود من الملف بنجاح`);
+        toast.success(`تم استخراج ${extracted.length} كود بنجاح من الملف`);
       }
     } catch (err) {
-      console.error('File parse general error:', err);
-      toast.error('فشل قراءة الملف. يُرجى استخدام خيار (إضافة مجمع).');
+      console.error('File parse spatial error:', err);
+      toast.error('فشل قراءة الملف، يُرجى المحاولة باستخدام (إضافة مجمع).');
     } finally {
       setPdfLoading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -1000,7 +1042,7 @@ const LoansPage = ({ user }: LoansPageProps) => {
                     <tbody>
                       {filteredLoans.map((loan) => (
                         <tr key={loan.id} onClick={() => toggleBulkSelect(loan.id)} className={`cursor-pointer ${bulkSelected.has(loan.id) ? 'bg-red-500/5' : ''}`}>
-                          <td><div className={`w-4 h-4 rounded border flex items-center justify-center ${bulkSelected.has(loan.id) ? 'bg-red-500 border-red-500' : 'border-border'}`}>{bulkSelected.has(loan.id) && <Check size={10} className="text-white" />}</div></td>
+                          <td><div className={`w-4 h-4 rounded border flex items-center justify-center ${bulkSelected.has(loan.id) ? 'bg-red-500 border-red-500' : 'border-red-500'}`}>{bulkSelected.has(loan.id) && <Check size={10} className="text-white" />}</div></td>
                           <td><code className="text-sky-400 text-xs bg-sky-500/10 px-2 py-0.5 rounded">{loan.code}</code></td>
                           <td className="text-gray-300 text-sm">{loan.packageName}</td>
                           <td className="text-gray-500 text-xs">{formatDate(loan.addedAt)}</td>
