@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Eye, EyeOff, LogIn, UserPlus, Shield } from 'lucide-react';
 import { login, register } from '@/lib/auth';
 import { APP_NAME, OWNER_NAME, CONTACT_PHONE } from '@/constants';
@@ -8,6 +8,8 @@ import type { User } from '@/types';
 interface LoginPageProps {
   onLogin: (user: User) => void;
 }
+
+const LAST_EMAIL_KEY = 'tawasulnet_last_email';
 
 const LoginPage = ({ onLogin }: LoginPageProps) => {
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -19,6 +21,14 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
     email: '',
     password: '',
   });
+
+  // استرجاع آخر إيميل تم حفظه تلقائياً عند فتح الصفحة
+  useEffect(() => {
+    const savedEmail = localStorage.getItem(LAST_EMAIL_KEY);
+    if (savedEmail) {
+      setForm((prev) => ({ ...prev, email: savedEmail }));
+    }
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -32,6 +42,8 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
       if (mode === 'login') {
         const result = login(form.email, form.password);
         if (result.success && result.user) {
+          // حفظ الإيميل تلقائياً في المتصفح لاستخدامه لاحقاً
+          localStorage.setItem(LAST_EMAIL_KEY, form.email.trim());
           toast.success('تم تسجيل الدخول بنجاح');
           onLogin(result.user);
         } else {
@@ -45,8 +57,9 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
         }
         const result = register(form.name, form.email, form.password);
         if (result.success && result.user) {
-          toast.success('تم إنشاء الحساب بنجاح');
-          onLogin(result.user);
+          localStorage.setItem(LAST_EMAIL_KEY, form.email.trim());
+          toast.success('تم إنشاء الحساب بنجاح، بانتظار موافقة المدير');
+          setMode('login');
         } else {
           toast.error(result.error || 'فشل إنشاء الحساب');
         }
@@ -178,14 +191,6 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                 )}
               </button>
             </form>
-
-            {mode === 'login' && (
-              <div className="mt-4 p-3 rounded-lg bg-sky-500/5 border border-sky-500/15">
-                <p className="text-gray-500 text-xs text-center">
-                  بيانات المدير: <span className="text-sky-400" dir="ltr">admin@tawasulnet.com</span> / <span className="text-sky-400">admin123</span>
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Footer info */}
