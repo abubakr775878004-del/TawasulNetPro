@@ -10,7 +10,15 @@ interface HeaderProps {
   onOpenPendingModal?: () => void;
 }
 
-// بيانات بوت التلجرام الخاصة بك
+// واجهة بيانات الموزع (الاسم، البريد الإلكتروني، الحالة)
+interface DistributorProfile {
+  id?: string;
+  name?: string;
+  email?: string;
+  status?: string;
+  role?: string;
+}
+
 const TELEGRAM_BOT_TOKEN = '8819290545:AAE2fRCIhKhHTyvtIvAirsKMeXyMFCPKlAA';
 const TELEGRAM_CHAT_ID = '529585421';
 
@@ -18,7 +26,31 @@ const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState<number>(0);
 
-  // 1. جلب عدد الطلبات المعلقة والاستماع للتغييرات اللحظية (Realtime)
+  // دالة إرسال التنبيه إلى التلجرام (الاسم + البريد الإلكتروني + التاريخ)
+  const sendTelegramNotification = async (newUser: DistributorProfile) => {
+    const message = `🔔 *طلب تسجيل موزع جديد!*
+
+👤 *الاسم:* ${newUser.name || 'غير محدد'}
+✉️ *البريد:* ${newUser.email || 'غير محدد'}
+📅 *التاريخ:* ${new Date().toLocaleDateString('ar-EG')}
+
+📌 *الحالة:* بانتظار الاعتماد والموافقة.`;
+
+    try {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          text: message,
+          parse_mode: 'Markdown',
+        }),
+      });
+    } catch (error) {
+      console.error('Telegram notification failed:', error);
+    }
+  };
+
   useEffect(() => {
     if (user.role !== 'admin') return;
 
@@ -36,7 +68,6 @@ const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
 
     fetchPendingUsers();
 
-    // الاستماع الفوري لأي موزع جديد يسجل
     const channel = supabase
       .channel('pending-distributors-count')
       .on(
@@ -44,9 +75,9 @@ const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
         { event: 'INSERT', schema: 'public', table: 'profiles' },
         (payload) => {
           fetchPendingUsers();
-          // إرسال تنبيه تلجرام فور تسجيل موزع جديد
-          if (payload.new && payload.new.status === 'pending') {
-            sendTelegramNotification(payload.new);
+          const newProfile = payload.new as DistributorProfile;
+          if (newProfile && newProfile.status === 'pending') {
+            sendTelegramNotification(newProfile);
           }
         }
       )
@@ -64,32 +95,6 @@ const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
     };
   }, [user.role]);
 
-  // 2. دالة إرسال التنبيه إلى بوت التلجرام الخاص بك (@Abubakr_515_bot)
-  const sendTelegramNotification = async (newUser: any) => {
-    const message = `🔔 *طلب تسجيل موزع جديد!*
-    
-👤 *الاسم:* ${newUser.name || 'غير محدد'}
-📞 *الهاتف:* ${newUser.phone || 'غير محدد'}
-✉️ *البريد:* ${newUser.email || 'غير محدد'}
-📅 *التاريخ:* ${new Date().toLocaleDateString('ar-EG')}
-
-📌 *الحالة:* بانتظار الاعتماد والموافقة من الإدارة.`;
-
-    try {
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text: message,
-          parse_mode: 'Markdown',
-        }),
-      });
-    } catch (error) {
-      console.error('فشل إرسال إشعار التلجرام:', error);
-    }
-  };
-
   return (
     <header
       className="fixed top-0 right-0 left-0 z-40 h-16 flex items-center justify-between px-6 border-b border-border/50"
@@ -106,7 +111,7 @@ const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
 
       {/* Right section */}
       <div className="flex items-center gap-3">
-        {/* Notification bell for Pending Distributors */}
+        {/* Notification bell */}
         {user.role === 'admin' && (
           <button
             onClick={onOpenPendingModal}
