@@ -1,15 +1,94 @@
 import { Bell, LogOut, User, ChevronDown } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { APP_NAME } from '@/constants';
 import type { User as UserType } from '@/types';
+import { supabase } from '@/lib/supabase';
 
 interface HeaderProps {
   user: UserType;
   onLogout: () => void;
+  onOpenPendingModal?: () => void;
 }
 
-const Header = ({ user, onLogout }: HeaderProps) => {
+// بيانات بوت التلجرام الخاصة بك
+const TELEGRAM_BOT_TOKEN = '8819290545:AAE2fRCIhKhHTyvtIvAirsKMeXyMFCPKlAA';
+const TELEGRAM_CHAT_ID = '529585421';
+
+const Header = ({ user, onLogout, onOpenPendingModal }: HeaderProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+
+  // 1. جلب عدد الطلبات المعلقة والاستماع للتغييرات اللحظية (Realtime)
+  useEffect(() => {
+    if (user.role !== 'admin') return;
+
+    const fetchPendingUsers = async () => {
+      const { count, error } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .eq('role', 'distributor')
+        .eq('status', 'pending');
+
+      if (!error && count !== null) {
+        setPendingCount(count);
+      }
+    };
+
+    fetchPendingUsers();
+
+    // الاستماع الفوري لأي موزع جديد يسجل
+    const channel = supabase
+      .channel('pending-distributors-count')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'profiles' },
+        (payload) => {
+          fetchPendingUsers();
+          // إرسال تنبيه تلجرام فور تسجيل موزع جديد
+          if (payload.new && payload.new.status === 'pending') {
+            sendTelegramNotification(payload.new);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles' },
+        () => {
+          fetchPendingUsers();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user.role]);
+
+  // 2. دالة إرسال التنبيه إلى بوت التلجرام الخاص بك (@Abubakr_515_bot)
+  const sendTelegramNotification = async (newUser: any) => {
+    const message = `🔔 *طلب تسجيل موزع جديد!*
+    
+👤 *الاسم:* ${newUser.name || 'غير محدد'}
+📞 *الهاتف:* ${newUser.phone || 'غير محدد'}
+✉️ *البريد:* ${newUser.email || 'غير محدد'}
+📅 *التاريخ:* ${new Date().toLocaleDateString('ar-EG')}
+
+📌 *الحالة:* بانتظار الاعتماد والموافقة من الإدارة.`;
+
+    try {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          text: message,
+          parse_mode: 'Markdown',
+        }),
+      });
+    } catch (error) {
+      console.error('فشل إرسال إشعار التلجرام:', error);
+    }
+  };
 
   return (
     <header
@@ -27,11 +106,21 @@ const Header = ({ user, onLogout }: HeaderProps) => {
 
       {/* Right section */}
       <div className="flex items-center gap-3">
-        {/* Notification bell */}
-        <button className="relative p-2 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
-          <Bell size={18} />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-sky-500 rounded-full" />
-        </button>
+        {/* Notification bell for Pending Distributors */}
+        {user.role === 'admin' && (
+          <button
+            onClick={onOpenPendingModal}
+            title="طلبات الموزعين المعلقة"
+            className="relative p-2 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors"
+          >
+            <Bell size={18} />
+            {pendingCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white font-bold text-[10px] rounded-full flex items-center justify-center animate-pulse">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        )}
 
         {/* User menu */}
         <div className="relative">
